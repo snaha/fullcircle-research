@@ -178,6 +178,8 @@ Identifies Swarm as one of six potential actors for serving historical data post
 
 ### 4.5 Solana + Filecoin ("Old Faithful")
 
+**Source:** https://docs.old-faithful.net/
+
 Triton One's project archives Solana's entire ledger on Filecoin/IPFS (~250 TB, growing ~500 GB every 2 days). Uses CAR (Content Addressable Archives) format. Best existing precedent for blockchain-on-decentralized-storage at scale.
 
 ### 4.6 IPLD Ethereum Codecs
