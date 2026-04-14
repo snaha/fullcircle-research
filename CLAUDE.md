@@ -10,6 +10,7 @@ Project issue: https://github.com/ethersphere/swarm-accelerator/issues/5
 
 - **[RESEARCH.md](./RESEARCH.md)** -- Technical research: Ethereum data structures, Swarm storage primitives, EIP-4444 history expiry, Portal Network, Era1 file format, prior art, and technical challenges
 - **[PROPOSAL.md](./PROPOSAL.md)** -- Implementation proposal: TypeScript tooling, architecture options, and day-by-day PoC plan
+- **[INCENTIVIZATION.md](./INCENTIVIZATION.md)** -- Sustainability research: funding models, endowment design, Data DAO structure, and hybrid approaches for perpetual storage
 
 ## Context
 
@@ -22,6 +23,7 @@ EIP-4444 (history expiry) is now live across all Ethereum clients. Nodes are act
 - **Prior proposals**: Viktor Tron's state-on-Swarm, Swarm Data Chain, trustless state access
 - **Comparison**: Portal Network (altruistic, Ethereum-specific) vs Swarm (incentivized, general-purpose)
 - **Challenges**: Data scale (~1 TB+), hash function mismatch (BMT vs Keccak256), retrieval latency, persistence economics
+- **Incentivization**: Endowment models, public goods funding, Data DAOs, hybrid funding approaches for perpetual storage
 
 ## Related Repos in Workspace
 
