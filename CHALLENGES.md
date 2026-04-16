@@ -40,12 +40,11 @@ Swarm chunk retrieval adds network latency vs local disk. For block sync (which 
 
 Ethereum data is naturally indexed by block number, tx hash, address, and log topics. Swarm's content addressing doesn't natively support these query patterns. Solutions:
 
-    Feeds for block-number -> reference mapping
-    Manifests for structured access
-    Separate index structures built on Swarm
+- Feeds for block-number -> reference mapping
+- Manifests for structured access
+- Separate index structures built on Swarm
 
-    ^^^^^^^^^^^^ POT -> https://github.com/ethersphere/proximity-order-trie
-    to the rescue 
+[POT](https://github.com/ethersphere/proximity-order-trie) to the rescue.
 
 8.5 Persistence Economics
 
