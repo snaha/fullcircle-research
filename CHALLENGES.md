@@ -4,19 +4,17 @@
 
 At 4KB per chunk, 1 TB = ~250 million chunks. Full Ethereum history (~1 TB) would require significant Swarm network capacity and postage stamp funding.
 
-    8.1B if we do not only want historical data but also live, the challenge is also latency
+8.1B If we do not only want historical data but also live data, the challenge is also latency.
 
-    Solution: 
+Solution:
 
-    - assume header chain 
-    - having a balanced staked subnetwork serving as Swarm Bridge service (nodes simulateously running Eth node with at least an Swarm API client) save (see 8.2 on how) data pinned locally to their extended cold store
-    - use DSN registry contract as source for block-> overlay map, optoional network location retrieval can used to pull these out to hot storage. (mechanism described in SWIP on global pinning)
-
-    - solves cheap/free storage
-    - popular nodes to hot storage only
-    - no real time network I/O just client-local save initially
-    - closest node to ID read from SBS DSN contract
-
+- assume header chain
+- having a balanced staked subnetwork serving as Swarm Bridge service (nodes simulateously running Eth node with at least an Swarm API client) save (see 8.2 on how) data pinned locally to their extended cold store
+- use DSN registry contract as source for block-> overlay map, optoional network location retrieval can used to pull these out to hot storage. (mechanism described in SWIP on global pinning)
+- solves cheap/free storage
+- popular nodes to hot storage only
+- no real time network I/O just client-local save initially
+- closest node to ID read from SBS DSN contract
 8.2 Hash Function Mismatch
 
 Swarm uses BMT hashes; Ethereum state uses Keccak256. Storing era1 files as opaque blobs avoids this issue. But for state-on-Swarm approaches (trie nodes as chunks), this requires protocol-level changes to Bee or a mapping layer.
