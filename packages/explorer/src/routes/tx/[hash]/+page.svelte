@@ -110,6 +110,15 @@
           <dt class="text-muted-foreground">Nonce</dt>
           <dd class="font-mono">{tx.nonce}</dd>
 
+          <dt class="text-muted-foreground">From</dt>
+          <dd class="break-all font-mono">
+            {#if tx.from === null}
+              <span class="text-muted-foreground">(recovery failed)</span>
+            {:else}
+              {tx.from}
+            {/if}
+          </dd>
+
           <dt class="text-muted-foreground">To</dt>
           <dd class="break-all font-mono">
             {#if tx.to === null}

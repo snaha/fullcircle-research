@@ -6,9 +6,10 @@
 // Each inner field is already RLP-encoded, so the outer RLP wraps them as
 // byte strings. `tdBytes` is big-endian totalDifficulty; empty for post-merge.
 //
-// Browser-safe: only depends on @ethereumjs/rlp and @noble/hashes.
+// Browser-safe: only depends on @ethereumjs/rlp, @noble/hashes, @noble/curves.
 
 import { RLP } from '@ethereumjs/rlp'
+import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
 
 // ---------- Bundle envelope ----------
@@ -120,6 +121,7 @@ export interface DecodedTransaction {
   maxFeePerGas?: bigint
   maxPriorityFeePerGas?: bigint
   gasLimit: bigint
+  from: string | null // recovered via secp256k1; null if recovery fails
   to: string | null
   value: bigint
   input: string
@@ -179,18 +181,20 @@ export function decodeTransaction(bytes: Uint8Array): DecodedTransaction {
 
     if (type === 0x01) {
       // EIP-2930: [chainId, nonce, gasPrice, gasLimit, to, value, data, accessList, v, r, s]
+      const v = bytesToBigInt(b(8))
       return {
         hash,
         type,
         nonce: bytesToBigInt(b(1)),
         gasPrice: bytesToBigInt(b(2)),
         gasLimit: bytesToBigInt(b(3)),
+        from: recoverTypedSender(type, fields.slice(0, 8), v, b(9), b(10)),
         to: b(4).length === 0 ? null : toFixedHex(b(4), 20),
         value: bytesToBigInt(b(5)),
         input: toHex(b(6)),
         chainId: bytesToBigInt(b(0)),
         accessList: list(7),
-        v: bytesToBigInt(b(8)),
+        v,
         r: toFixedHex(b(9), 32),
         s: toFixedHex(b(10), 32),
         raw,
@@ -198,6 +202,7 @@ export function decodeTransaction(bytes: Uint8Array): DecodedTransaction {
     }
     if (type === 0x02) {
       // EIP-1559: [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, v, r, s]
+      const v = bytesToBigInt(b(9))
       return {
         hash,
         type,
@@ -205,19 +210,21 @@ export function decodeTransaction(bytes: Uint8Array): DecodedTransaction {
         maxPriorityFeePerGas: bytesToBigInt(b(2)),
         maxFeePerGas: bytesToBigInt(b(3)),
         gasLimit: bytesToBigInt(b(4)),
+        from: recoverTypedSender(type, fields.slice(0, 9), v, b(10), b(11)),
         to: b(5).length === 0 ? null : toFixedHex(b(5), 20),
         value: bytesToBigInt(b(6)),
         input: toHex(b(7)),
         chainId: bytesToBigInt(b(0)),
         accessList: list(8),
-        v: bytesToBigInt(b(9)),
+        v,
         r: toFixedHex(b(10), 32),
         s: toFixedHex(b(11), 32),
         raw,
       }
     }
     if (type === 0x03) {
-      // EIP-4844 blob tx — we only shape the core fields here
+      // EIP-4844 blob tx: [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, maxFeePerBlobGas, blobVersionedHashes, v, r, s]
+      const v = bytesToBigInt(b(11))
       return {
         hash,
         type,
@@ -225,6 +232,7 @@ export function decodeTransaction(bytes: Uint8Array): DecodedTransaction {
         maxPriorityFeePerGas: bytesToBigInt(b(2)),
         maxFeePerGas: bytesToBigInt(b(3)),
         gasLimit: bytesToBigInt(b(4)),
+        from: recoverTypedSender(type, fields.slice(0, 11), v, b(12), b(13)),
         to: b(5).length === 0 ? null : toFixedHex(b(5), 20),
         value: bytesToBigInt(b(6)),
         input: toHex(b(7)),
@@ -238,6 +246,7 @@ export function decodeTransaction(bytes: Uint8Array): DecodedTransaction {
       type,
       nonce: 0n,
       gasLimit: 0n,
+      from: null,
       to: null,
       value: 0n,
       input: '0x',
@@ -247,19 +256,84 @@ export function decodeTransaction(bytes: Uint8Array): DecodedTransaction {
 
   // Legacy: [nonce, gasPrice, gasLimit, to, value, data, v, r, s]
   const fields = RLP.decode(bytes) as Uint8Array[]
+  const v = bytesToBigInt(fields[6])
   return {
     hash,
     type: 0,
     nonce: bytesToBigInt(fields[0]),
     gasPrice: bytesToBigInt(fields[1]),
     gasLimit: bytesToBigInt(fields[2]),
+    from: recoverLegacySender(fields.slice(0, 6), v, fields[7], fields[8]),
     to: fields[3].length === 0 ? null : toFixedHex(fields[3], 20),
     value: bytesToBigInt(fields[4]),
     input: toHex(fields[5]),
-    v: bytesToBigInt(fields[6]),
+    v,
     r: toFixedHex(fields[7], 32),
     s: toFixedHex(fields[8], 32),
     raw,
+  }
+}
+
+// ---------- Internal: sender recovery (secp256k1) ----------
+
+function recoverLegacySender(
+  signedFields: Uint8Array[],
+  v: bigint,
+  r: Uint8Array,
+  s: Uint8Array,
+): string | null {
+  let recoveryId: number
+  let list: unknown[]
+  if (v === 27n || v === 28n) {
+    recoveryId = Number(v - 27n)
+    list = signedFields
+  } else if (v >= 35n) {
+    // EIP-155: v = chainId * 2 + 35 + recoveryId
+    const chainId = (v - 35n) >> 1n
+    recoveryId = Number((v - 35n) & 1n)
+    list = [...signedFields, bigIntToBytes(chainId), new Uint8Array(0), new Uint8Array(0)]
+  } else {
+    return null
+  }
+  const sigHash = keccak_256(RLP.encode(list as never))
+  return recoverAddress(sigHash, r, s, recoveryId)
+}
+
+function recoverTypedSender(
+  type: number,
+  signedFields: readonly unknown[],
+  v: bigint,
+  r: Uint8Array,
+  s: Uint8Array,
+): string | null {
+  if (v !== 0n && v !== 1n) return null
+  const payload = RLP.encode(signedFields as never)
+  const prefixed = new Uint8Array(1 + payload.length)
+  prefixed[0] = type
+  prefixed.set(payload, 1)
+  const sigHash = keccak_256(prefixed)
+  return recoverAddress(sigHash, r, s, Number(v))
+}
+
+function recoverAddress(
+  sigHash: Uint8Array,
+  r: Uint8Array,
+  s: Uint8Array,
+  recoveryId: number,
+): string | null {
+  if (r.length > 32 || s.length > 32) return null
+  const compact = new Uint8Array(64)
+  compact.set(r, 32 - r.length)
+  compact.set(s, 64 - s.length)
+  try {
+    const pub = secp256k1.Signature.fromCompact(compact)
+      .addRecoveryBit(recoveryId)
+      .recoverPublicKey(sigHash)
+      .toRawBytes(false) // 65 bytes: 0x04 || X || Y
+    const addr = keccak_256(pub.subarray(1)).subarray(12)
+    return '0x' + toHexRaw(addr)
+  } catch {
+    return null
   }
 }
 

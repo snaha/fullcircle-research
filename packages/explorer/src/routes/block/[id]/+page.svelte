@@ -186,6 +186,7 @@
               <thead>
                 <tr class="border-b text-xs uppercase tracking-wide text-muted-foreground">
                   <th class="px-6 py-2 text-left font-medium">Hash</th>
+                  <th class="px-3 py-2 text-left font-medium">From</th>
                   <th class="px-3 py-2 text-left font-medium">To</th>
                   <th class="px-3 py-2 text-left font-medium">Value</th>
                   <th class="px-3 py-2 text-left font-medium">Gas limit</th>
@@ -202,6 +203,13 @@
                       >
                         {shortHash(tx.hash)}
                       </a>
+                    </td>
+                    <td class="px-3 py-2 font-mono">
+                      {#if tx.from === null}
+                        <span class="text-muted-foreground">—</span>
+                      {:else}
+                        {shortHash(tx.from, 10, 6)}
+                      {/if}
                     </td>
                     <td class="px-3 py-2 font-mono">
                       {#if tx.to === null}
