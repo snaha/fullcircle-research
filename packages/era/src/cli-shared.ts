@@ -3,12 +3,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  buildEraeIndex,
   fetchEraeFile,
   parseEraeFile,
   type EraeBlock,
   type EraeFile,
-  type EraeIndex,
 } from './erae.js'
 
 export const BASE_URL = 'https://data.ethpandaops.io/erae/mainnet'
@@ -38,7 +36,7 @@ function targetFor(url: string, era: number | null): Target {
     fileBase,
     eraePath: resolve(DATA_DIR, `${fileBase}.erae`),
     blocksPath: resolve(DATA_DIR, `${fileBase}.blocks.ndjson`),
-    indexPath: resolve(DATA_DIR, `${fileBase}.index.json`),
+    indexPath: resolve(DATA_DIR, `${fileBase}.index.ndjson`),
     summaryPath: resolve(DATA_DIR, `${fileBase}.summary.json`),
   }
 }
@@ -106,19 +104,14 @@ export async function processTarget(t: Target): Promise<void> {
 
   const t1 = Date.now()
   const file = parseEraeFile(bytes)
+  const txTotal = file.blocks.reduce((n, b) => n + b.txHashes.length, 0)
   console.log(
-    `parse  version=0x${file.version.toString(16)} start=${file.startingBlock} count=${file.blockCount} in ${Date.now() - t1} ms`,
-  )
-
-  const t2 = Date.now()
-  const index = buildEraeIndex(file)
-  console.log(
-    `index  ${index.byNumber.size} blocks, ${index.byTxHash.size} txs in ${Date.now() - t2} ms`,
+    `parse  version=0x${file.version.toString(16)} start=${file.startingBlock} count=${file.blockCount} txs=${txTotal} in ${Date.now() - t1} ms`,
   )
 
   await writeSummary(t.summaryPath, t.url, file)
   await writeBlocksNdjson(t.blocksPath, file)
-  await writeIndex(t.indexPath, index)
+  await writeIndex(t.indexPath, file)
   console.log(
     `write  summary=${fmtBytes(statSync(t.summaryPath).size)}  blocks=${fmtBytes(statSync(t.blocksPath).size)}  index=${fmtBytes(statSync(t.indexPath).size)}`,
   )
@@ -221,21 +214,25 @@ function blockToJson(b: EraeBlock): string {
   })
 }
 
-async function writeIndex(path: string, idx: EraeIndex): Promise<void> {
-  const numberToHash: Record<string, string> = {}
-  const hashToNumber: Record<string, string> = {}
-  for (const [n, b] of idx.byNumber) {
-    numberToHash[n.toString()] = `0x${hex(b.hash)}`
+// Records are emitted interleaved in block order so an RPC tailer can just
+// append new lines (one "block" + one "tx" per transaction) without
+// rewriting. A consumer builds lookup maps by scanning the whole file once.
+async function writeIndex(path: string, f: EraeFile): Promise<void> {
+  const lines: string[] = []
+  for (const b of f.blocks) {
+    const number = b.number.toString()
+    const blockHash = `0x${hex(b.hash)}`
+    lines.push(JSON.stringify({ kind: 'block', number, hash: blockHash }))
+    for (let i = 0; i < b.txHashes.length; i++) {
+      lines.push(
+        JSON.stringify({
+          kind: 'tx',
+          hash: `0x${hex(b.txHashes[i])}`,
+          blockNumber: number,
+          txIndex: i,
+        }),
+      )
+    }
   }
-  for (const [h, b] of idx.byBlockHash) {
-    hashToNumber[`0x${h}`] = b.number.toString()
-  }
-  const txHashToLoc: Record<string, [string, number]> = {}
-  for (const [h, loc] of idx.byTxHash) {
-    txHashToLoc[`0x${h}`] = [loc.block.number.toString(), loc.txIndex]
-  }
-  await writeFile(
-    path,
-    JSON.stringify({ numberToHash, hashToNumber, txHashToLoc }),
-  )
+  await writeFile(path, lines.join('\n') + '\n')
 }

@@ -56,7 +56,7 @@ pnpm install
 
 # three root scripts — each takes the same arg (range, era number, or URL)
 pnpm era:download                   # fetch eras 0..6 into data/
-pnpm era:process 0..6               # parse cached files → .summary.json / .blocks.ndjson / .index.json
+pnpm era:process 0..6               # parse cached files → .summary.json / .blocks.ndjson / .index.ndjson
 pnpm era:download-and-process 7     # both, one pass
 
 pnpm era:download 42                # single era
@@ -79,7 +79,23 @@ Everything lands in [`data/`](./data/) (gitignored). Per era:
 | `mainnet-NNNNN-<hash>.erae` | raw download |
 | `…summary.json` | version, block range, accumulator root, first/last block, tx total |
 | `…blocks.ndjson` | one JSON line per block: `number`, `hash`, `totalDifficulty`, `txHashes`, `rawHeader`, `rawBody`, `rawReceipts`, `proof` (bytes as `0x…` hex) |
-| `…index.json` | `numberToHash`, `hashToNumber`, `txHashToLoc` (→ `[blockNumber, txIndex]`) |
+| `…index.ndjson` | interleaved block + tx records (see below) |
+
+The `…index.ndjson` has two record kinds, emitted in block order. A block
+record is followed immediately by its transaction records:
+
+```jsonc
+{"kind":"block","number":"57344","hash":"0x523f…"}
+{"kind":"block","number":"57345","hash":"0xa20c…"}
+{"kind":"block","number":"57346","hash":"0xa395…"}
+{"kind":"tx","hash":"0x5484…","blockNumber":"57346","txIndex":0}
+{"kind":"tx","hash":"0x704b…","blockNumber":"57346","txIndex":1}
+```
+
+A consumer scans the file once to build `byNumber`, `byBlockHash`, and
+`byTxHash` maps. The shape is append-friendly on purpose — when an RPC tail
+(or any later-arriving data) needs to be stitched on, it's a single
+`fs.appendFile` per new block + tx, with no file rewrite.
 
 ### Ballpark sizes (per era)
 
@@ -87,7 +103,7 @@ Everything lands in [`data/`](./data/) (gitignored). Per era:
 |---|---|---|
 | `.erae` | ~3.7 MiB | ~4.0–4.4 MiB |
 | `.blocks.ndjson` | ~11 MiB | ~11.3–12.5 MiB |
-| `.index.json` | ~1.2 MiB | ~1.3–1.6 MiB |
+| `.index.ndjson` | ~880 KiB | ~1.0–1.3 MiB |
 
 Eras 0–4 contain zero transactions: the first mainnet transaction was block
 46,147 (in era 5). That's a real chain property, not a parser bug.

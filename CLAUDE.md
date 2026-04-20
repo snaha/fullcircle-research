@@ -26,9 +26,9 @@ pnpm workspace. Single package today; UI / other packages slot in under
   - [src/erae.ts](./packages/era/src/erae.ts) -- three pure functions for the erae archive format: `fetchEraeFile`, `parseEraeFile`, `buildEraeIndex`. Handles E2Store framing, snappy-framed decompression, RLP-decoded block hashes + tx hashes (legacy and EIP-2718 typed).
   - [src/cli-shared.ts](./packages/era/src/cli-shared.ts) -- shared CLI helpers: data-dir resolution, target resolution (era range / URL), download, parse-and-write.
   - [src/download.ts](./packages/era/src/download.ts) -- entry: fetch erae file(s) into [data/](./data/).
-  - [src/process.ts](./packages/era/src/process.ts) -- entry: parse cached erae file(s), write `.summary.json` / `.blocks.ndjson` / `.index.json`.
+  - [src/process.ts](./packages/era/src/process.ts) -- entry: parse cached erae file(s), write `.summary.json` / `.blocks.ndjson` / `.index.ndjson`.
   - [src/download-and-process.ts](./packages/era/src/download-and-process.ts) -- entry: both, in one pass.
-- [data/](./data/) -- gitignored. Cached `.erae` downloads plus per-era output: `.summary.json`, `.blocks.ndjson` (full blocks as hex), `.index.json` (number↔hash↔tx lookup maps).
+- [data/](./data/) -- gitignored. Cached `.erae` downloads plus per-era output: `.summary.json`, `.blocks.ndjson` (full blocks as hex), `.index.ndjson` (interleaved `block` / `tx` records — scan to build number↔hash and txHash→location maps; append-friendly for an RPC tail).
 
 Package manager: **pnpm** (not npm). Root scripts:
 - `pnpm era:download [range|url]` -- download only
