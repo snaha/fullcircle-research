@@ -2,12 +2,7 @@ import { existsSync, statSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import {
-  fetchEraeFile,
-  parseEraeFile,
-  type EraeBlock,
-  type EraeFile,
-} from './erae.js'
+import { fetchEraeFile, parseEraeFile, type EraeBlock, type EraeFile } from './erae.js'
 
 export const BASE_URL = 'https://data.ethpandaops.io/erae/mainnet'
 export const CHECKSUMS_URL = `${BASE_URL}/checksums_sha256.txt`
@@ -92,9 +87,7 @@ export async function downloadIfMissing(t: Target): Promise<Uint8Array> {
 /** Read cached erae bytes, parse, build index, write artefacts. */
 export async function processTarget(t: Target): Promise<void> {
   if (!existsSync(t.eraePath)) {
-    throw new Error(
-      `no cached file at ${t.eraePath} — run the download step first`,
-    )
+    throw new Error(`no cached file at ${t.eraePath} — run the download step first`)
   }
   const t0 = Date.now()
   const bytes = new Uint8Array(await readFile(t.eraePath))
@@ -128,9 +121,7 @@ async function loadFilenames(): Promise<Map<number, string>> {
     console.log(`fetch  ${CHECKSUMS_URL}`)
     const res = await fetch(CHECKSUMS_URL)
     if (!res.ok) {
-      throw new Error(
-        `checksums: ${res.status} ${res.statusText} for ${CHECKSUMS_URL}`,
-      )
+      throw new Error(`checksums: ${res.status} ${res.statusText} for ${CHECKSUMS_URL}`)
     }
     text = await res.text()
     await writeFile(localPath, text)
@@ -167,11 +158,7 @@ function hex(b: Uint8Array): string {
 
 // ---------- writers ----------
 
-async function writeSummary(
-  path: string,
-  sourceUrl: string,
-  f: EraeFile,
-): Promise<void> {
+async function writeSummary(path: string, sourceUrl: string, f: EraeFile): Promise<void> {
   const first = f.blocks[0]
   const last = f.blocks[f.blocks.length - 1]
   const body = {

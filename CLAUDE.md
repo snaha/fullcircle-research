@@ -35,6 +35,15 @@ Package manager: **pnpm** (not npm). Root scripts:
 - `pnpm era:process [range|url]` -- parse cached files only
 - `pnpm era:download-and-process [range|url]` -- both
 - `pnpm bee:start` -- boot local single Swarm node (queen only) via `@fairdatasociety/fdp-play`; queen API on `:1633`. Also `bee:start:detach`, `bee:stop`, `bee:logs`, `bee:fresh`.
+- `pnpm lint` / `pnpm format` / `pnpm knip` / `pnpm check:all` -- forward via `pnpm -r --if-present` to every package that defines the matching script.
+
+## Tooling (prettier, eslint, knip)
+
+Each package owns its own configs (`.prettierrc` where needed, `.prettierignore`, `eslint.config.mjs`, `knip.ts`) and exposes a uniform script surface: `lint`, `format`, `knip`, `check`, `check:all`. Root `.prettierrc` / `.prettierignore` act as baseline fallbacks for packages that don't need overrides.
+
+- `pnpm check:all` at root = lint + typecheck + knip across every package
+- Per-package: `pnpm --filter <pkg> check:all` (or `cd packages/<pkg> && pnpm check:all`)
+- `format` runs prettier + `eslint --fix`; `lint` is check-only
 
 ## Key Research Areas
 

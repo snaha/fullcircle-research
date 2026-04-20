@@ -7,10 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { createRpcServer } from './server.js'
 import { DataStore } from './store.js'
 
-const DEFAULT_DATA_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../../data',
-)
+const DEFAULT_DATA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../data')
 
 const dataDir = process.env.FULLCIRCLE_DATA_DIR ?? DEFAULT_DATA_DIR
 const port = Number(process.env.FULLCIRCLE_RPC_PORT ?? 8545)

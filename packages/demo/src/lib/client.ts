@@ -12,8 +12,7 @@ export const fullcircleChain = defineChain({
   },
 })
 
-export const DEFAULT_RPC_URL =
-  import.meta.env.VITE_FULLCIRCLE_RPC_URL ?? 'http://127.0.0.1:8545'
+export const DEFAULT_RPC_URL = import.meta.env.VITE_FULLCIRCLE_RPC_URL ?? 'http://127.0.0.1:8545'
 
 export function makeClient(url: string = DEFAULT_RPC_URL) {
   return createPublicClient({
@@ -21,5 +20,3 @@ export function makeClient(url: string = DEFAULT_RPC_URL) {
     transport: http(url, { retryCount: 0 }),
   })
 }
-
-export type FullcircleClient = ReturnType<typeof makeClient>
