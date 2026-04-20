@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rpc",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@fullcircle/rpc", "start"],
+      "port": 8545
+    },
+    {
+      "name": "demo",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@fullcircle/demo", "dev"],
+      "port": 5173
+    }
+  ]
+}
