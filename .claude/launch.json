@@ -11,7 +11,7 @@
       "name": "demo",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@fullcircle/demo", "dev"],
-      "port": 5173
+      "port": 5317
     }
   ]
 }
