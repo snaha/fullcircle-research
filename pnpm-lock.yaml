@@ -7,6 +7,18 @@ settings:
 importers:
 
   .:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
+  packages/era:
     dependencies:
       '@ethereumjs/rlp':
         specifier: ^5.0.2
@@ -18,15 +30,9 @@ importers:
         specifier: ^0.7.0
         version: 0.7.0
     devDependencies:
-      '@types/node':
-        specifier: ^25.6.0
-        version: 25.6.0
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
-      typescript:
-        specifier: ^5.5.0
-        version: 5.9.3
 
 packages:
 

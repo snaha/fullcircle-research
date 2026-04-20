@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
-import { basename, resolve } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { basename, dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   buildEraeIndex,
   fetchEraeFile,
@@ -10,58 +11,98 @@ import {
   type EraeIndex,
 } from './erae.js'
 
-const BASE_URL = 'https://data.ethpandaops.io/erae/mainnet'
-const CHECKSUMS_URL = `${BASE_URL}/checksums_sha256.txt`
-const DATA_DIR = resolve('data')
+export const BASE_URL = 'https://data.ethpandaops.io/erae/mainnet'
+export const CHECKSUMS_URL = `${BASE_URL}/checksums_sha256.txt`
 
-// CLI: `tsx src/run.ts`            → eras 0..6
-//      `tsx src/run.ts 0..6`       → eras 0..6
-//      `tsx src/run.ts 12`         → era 12 only
-//      `tsx src/run.ts https://…`  → explicit URL
-const arg = process.argv[2]
-await mkdir(DATA_DIR, { recursive: true })
+// Always write into the repo-root `data/` directory, regardless of where the
+// CLI is invoked from. Override with FULLCIRCLE_DATA_DIR.
+export const DATA_DIR =
+  process.env.FULLCIRCLE_DATA_DIR ??
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../../data')
 
-if (arg && /^https?:\/\//.test(arg)) {
-  await processUrl(arg)
-} else {
+export interface Target {
+  era: number | null // null when the URL was passed directly
+  url: string
+  fileBase: string
+  eraePath: string
+  blocksPath: string
+  indexPath: string
+  summaryPath: string
+}
+
+function targetFor(url: string, era: number | null): Target {
+  const fileBase = basename(new URL(url).pathname).replace(/\.erae$/, '')
+  return {
+    era,
+    url,
+    fileBase,
+    eraePath: resolve(DATA_DIR, `${fileBase}.erae`),
+    blocksPath: resolve(DATA_DIR, `${fileBase}.blocks.ndjson`),
+    indexPath: resolve(DATA_DIR, `${fileBase}.index.json`),
+    summaryPath: resolve(DATA_DIR, `${fileBase}.summary.json`),
+  }
+}
+
+// CLI argument forms:
+//   (nothing)       → eras 0..6
+//   "7"             → era 7
+//   "0..6"          → eras 0..6
+//   "https://…"     → explicit URL (single target, no era number)
+export async function resolveTargets(arg: string | undefined): Promise<Target[]> {
+  await mkdir(DATA_DIR, { recursive: true })
+  if (arg && /^https?:\/\//.test(arg)) return [targetFor(arg, null)]
+
   const [lo, hi] = parseRange(arg ?? '0..6')
   const filenames = await loadFilenames()
+  const out: Target[] = []
   for (let era = lo; era <= hi; era++) {
     const fn = filenames.get(era)
     if (!fn) {
       console.error(`era ${era}: no filename in checksums — skipping`)
       continue
     }
-    console.log(`\n== era ${era} ==`)
-    await processUrl(`${BASE_URL}/${fn}`)
+    out.push(targetFor(`${BASE_URL}/${fn}`, era))
   }
+  return out
 }
 
-// ---------- driver ----------
+export function header(t: Target): string {
+  return t.era !== null ? `\n== era ${t.era} ==` : `\n== ${t.fileBase} ==`
+}
 
-async function processUrl(url: string): Promise<void> {
-  const fileBase = basename(new URL(url).pathname).replace(/\.erae$/, '')
-  const eraePath = resolve(DATA_DIR, `${fileBase}.erae`)
-  const blocksPath = resolve(DATA_DIR, `${fileBase}.blocks.ndjson`)
-  const indexPath = resolve(DATA_DIR, `${fileBase}.index.json`)
-  const summaryPath = resolve(DATA_DIR, `${fileBase}.summary.json`)
+// ---------- download ----------
 
-  let bytes: Uint8Array
-  if (existsSync(eraePath)) {
-    const t = Date.now()
-    bytes = new Uint8Array(await readFile(eraePath))
-    console.log(
-      `cache  ${fmtBytes(bytes.length)} from ${basename(eraePath)} in ${Date.now() - t} ms`,
-    )
-  } else {
-    const t = Date.now()
-    console.log(`fetch  ${url}`)
-    bytes = await fetchEraeFile(url)
-    await writeFile(eraePath, bytes)
-    console.log(
-      `       ${fmtBytes(bytes.length)} in ${Date.now() - t} ms -> ${basename(eraePath)}`,
+/** Fetch the erae file if not already cached. Returns bytes either way. */
+export async function downloadIfMissing(t: Target): Promise<Uint8Array> {
+  if (existsSync(t.eraePath)) {
+    const bytes = new Uint8Array(await readFile(t.eraePath))
+    console.log(`cache  ${fmtBytes(bytes.length)} from ${basename(t.eraePath)}`)
+    return bytes
+  }
+  const started = Date.now()
+  console.log(`fetch  ${t.url}`)
+  const bytes = await fetchEraeFile(t.url)
+  await writeFile(t.eraePath, bytes)
+  console.log(
+    `       ${fmtBytes(bytes.length)} in ${Date.now() - started} ms -> ${basename(t.eraePath)}`,
+  )
+  return bytes
+}
+
+// ---------- process ----------
+
+/** Read cached erae bytes, parse, build index, write artefacts. */
+export async function processTarget(t: Target): Promise<void> {
+  if (!existsSync(t.eraePath)) {
+    throw new Error(
+      `no cached file at ${t.eraePath} — run the download step first`,
     )
   }
+  const t0 = Date.now()
+  const bytes = new Uint8Array(await readFile(t.eraePath))
+  console.log(
+    `read   ${fmtBytes(bytes.length)} from ${basename(t.eraePath)} in ${Date.now() - t0} ms`,
+  )
 
   const t1 = Date.now()
   const file = parseEraeFile(bytes)
@@ -75,11 +116,11 @@ async function processUrl(url: string): Promise<void> {
     `index  ${index.byNumber.size} blocks, ${index.byTxHash.size} txs in ${Date.now() - t2} ms`,
   )
 
-  await writeSummary(summaryPath, url, file)
-  await writeBlocksNdjson(blocksPath, file)
-  await writeIndex(indexPath, index)
+  await writeSummary(t.summaryPath, t.url, file)
+  await writeBlocksNdjson(t.blocksPath, file)
+  await writeIndex(t.indexPath, index)
   console.log(
-    `write  summary=${fmtBytes(statSync(summaryPath).size)}  blocks=${fmtBytes(statSync(blocksPath).size)}  index=${fmtBytes(statSync(indexPath).size)}`,
+    `write  summary=${fmtBytes(statSync(t.summaryPath).size)}  blocks=${fmtBytes(statSync(t.blocksPath).size)}  index=${fmtBytes(statSync(t.indexPath).size)}`,
   )
 }
 
@@ -109,7 +150,7 @@ async function loadFilenames(): Promise<Map<number, string>> {
   return out
 }
 
-// ---------- range parsing ----------
+// ---------- helpers ----------
 
 function parseRange(s: string): [number, number] {
   const m = s.match(/^(\d+)(?:\.\.(\d+))?$/)
@@ -120,12 +161,11 @@ function parseRange(s: string): [number, number] {
   return [lo, hi]
 }
 
-// ---------- formatting ----------
-
-function fmtBytes(n: number): string {
+export function fmtBytes(n: number): string {
   const mb = n / 1024 / 1024
   return mb >= 1 ? `${mb.toFixed(2)} MiB` : `${(n / 1024).toFixed(1)} KiB`
 }
+
 function hex(b: Uint8Array): string {
   let s = ''
   for (const byte of b) s += byte.toString(16).padStart(2, '0')

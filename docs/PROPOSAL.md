@@ -1,7 +1,7 @@
 # FullCircle: Implementation Proposal
 
 **Project:** [ethersphere/swarm-accelerator#5](https://github.com/ethersphere/swarm-accelerator/issues/5)
-**Research:** See [RESEARCH.md](./RESEARCH.md) for technical background.
+**Research:** See [RESEARCH.md](RESEARCH.md) for technical background.
 
 ---
 

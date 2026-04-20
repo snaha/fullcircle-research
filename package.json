@@ -4,13 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p .",
-    "typecheck": "tsc -p . --noEmit"
-  },
-  "dependencies": {
-    "@ethereumjs/rlp": "^5.0.2",
-    "@noble/hashes": "^1.4.0",
-    "snappyjs": "^0.7.0"
+    "typecheck": "pnpm -r run typecheck",
+    "build": "pnpm -r run build",
+    "era:download": "pnpm --filter @fullcircle/era run download",
+    "era:process": "pnpm --filter @fullcircle/era run process",
+    "era:download-and-process": "pnpm --filter @fullcircle/era run download-and-process"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
