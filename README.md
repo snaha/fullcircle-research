@@ -236,20 +236,20 @@ vs. the [erae spec page](https://hackmd.io/pIZlxnitSciV5wUgW6W20w):
 
 ## Local Bee node
 
-A local Swarm cluster (queen + 1 worker) via
+A local single-node Swarm setup (queen only) via
 [`@fairdatasociety/fdp-play`](https://www.npmjs.com/package/@fairdatasociety/fdp-play).
 Requires Docker.
 
 ```bash
-pnpm bee:start          # queen + 1 worker, foreground (streams logs)
+pnpm bee:start          # queen only, foreground (streams logs)
 pnpm bee:start:detach   # same, background
-pnpm bee:stop           # stop cluster
+pnpm bee:stop           # stop node
 pnpm bee:logs           # follow queen logs
 pnpm bee:fresh          # clean start: purge data + pull latest images
 ```
 
-Endpoints: queen API at `http://localhost:1633`, worker 1 at
-`http://localhost:11633`, local blockchain RPC at `http://localhost:9545`.
+Endpoints: queen API at `http://localhost:1633`, local blockchain RPC at
+`http://localhost:9545`.
 
 ## Scripts
 
@@ -258,7 +258,7 @@ Endpoints: queen API at `http://localhost:1633`, worker 1 at
 - `pnpm era:download [range|url]` — fetch only
 - `pnpm era:process [range|url]` — parse cached files only
 - `pnpm era:download-and-process [range|url]` — both
-- `pnpm bee:start` / `bee:stop` / `bee:logs` / `bee:fresh` — local Bee cluster
+- `pnpm bee:start` / `bee:stop` / `bee:logs` / `bee:fresh` — local Bee node
 
 ## Dependencies
 

@@ -1,7 +1,14 @@
 <script lang="ts">
   import '../app.css'
   import { goto } from '$app/navigation'
+  import { Badge } from '$lib/components/ui/badge'
+  import { Button } from '$lib/components/ui/button'
+  import * as Dialog from '$lib/components/ui/dialog'
+  import { Input } from '$lib/components/ui/input'
+  import { Label } from '$lib/components/ui/label'
   import { hasManifest, saveSettings, settings } from '$lib/settings.svelte'
+  import SearchIcon from '@lucide/svelte/icons/search'
+  import SettingsIcon from '@lucide/svelte/icons/settings-2'
 
   let { children } = $props()
 
@@ -27,7 +34,6 @@
     }
     const hex = q.toLowerCase().startsWith('0x') ? q.toLowerCase() : `0x${q.toLowerCase()}`
     if (/^0x[0-9a-f]{64}$/.test(hex)) {
-      // Ambiguous between block hash and tx hash — /lookup disambiguates.
       goto(`/lookup/${hex}`)
       return
     }
@@ -35,118 +41,100 @@
   }
 </script>
 
-<header class="topbar">
-  <div class="brand">
-    <a href="/"><strong>FullCircle</strong> <span class="muted">explorer</span></a>
-  </div>
+<div class="min-h-screen bg-background text-foreground">
+  <header
+    class="sticky top-0 z-10 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+  >
+    <div class="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-5 py-3">
+      <a href="/" class="flex items-center gap-2 text-sm font-semibold">
+        <span
+          class="inline-flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-bold"
+          >FC</span
+        >
+        <span>FullCircle</span>
+        <span class="text-muted-foreground font-normal">explorer</span>
+      </a>
 
-  <form class="search" onsubmit={submitSearch}>
-    <input
-      type="text"
-      placeholder="Block # / hash / tx hash"
-      bind:value={query}
-      autocomplete="off"
-      spellcheck="false"
-    />
-    <button type="submit">Search</button>
-  </form>
+      <form class="flex min-w-0 flex-1 items-center gap-2" onsubmit={submitSearch}>
+        <div class="relative flex-1">
+          <SearchIcon
+            class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            type="text"
+            placeholder="Block # / block hash / tx hash"
+            class="pl-8 font-mono"
+            bind:value={query}
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+        <Button type="submit" size="sm">Search</Button>
+      </form>
 
-  <button type="button" class="gear" onclick={() => (settingsOpen = !settingsOpen)}>
-    ⚙ Settings
-  </button>
-</header>
+      <Button type="button" variant="outline" size="sm" onclick={() => (settingsOpen = true)}>
+        <SettingsIcon />
+        Settings
+      </Button>
+    </div>
 
-{#if settingsOpen}
-  <div class="settings-panel">
-    <form onsubmit={submitSettings}>
-      <label>
-        <span>Bee gateway URL</span>
-        <input type="url" bind:value={beeInput} placeholder="http://localhost:1633" />
-      </label>
-      <label>
-        <span>Manifest reference (64 hex chars)</span>
-        <input
-          type="text"
-          bind:value={manifestInput}
-          placeholder="<manifest hex>"
-          spellcheck="false"
-        />
-      </label>
-      <button type="submit">Save</button>
-    </form>
-  </div>
-{/if}
+    {#if hasManifest()}
+      <div class="border-t">
+        <div
+          class="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-5 py-1.5 text-xs text-muted-foreground"
+        >
+          <Badge variant="outline" class="font-mono">
+            bee · {settings.beeUrl.replace(/^https?:\/\//, '')}
+          </Badge>
+          <Badge variant="secondary" class="font-mono">
+            manifest · {settings.manifestRef.slice(0, 10)}…{settings.manifestRef.slice(-6)}
+          </Badge>
+        </div>
+      </div>
+    {/if}
+  </header>
 
-{@render children()}
+  <Dialog.Root bind:open={settingsOpen}>
+    <Dialog.Content>
+      <form onsubmit={submitSettings} class="flex flex-col gap-4">
+        <Dialog.Header>
+          <Dialog.Title>Source</Dialog.Title>
+          <Dialog.Description>
+            Point the explorer at a Bee gateway and a Mantaray manifest reference.
+          </Dialog.Description>
+        </Dialog.Header>
 
-<style>
-  .topbar {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 0.75rem 1.25rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--card);
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    flex-wrap: wrap;
-  }
+        <div class="flex flex-col gap-2">
+          <Label for="bee-url">Bee gateway URL</Label>
+          <Input
+            id="bee-url"
+            type="url"
+            bind:value={beeInput}
+            placeholder="http://localhost:1633"
+          />
+        </div>
 
-  .brand a {
-    color: inherit;
-    text-decoration: none;
-  }
+        <div class="flex flex-col gap-2">
+          <Label for="manifest-ref">Manifest reference</Label>
+          <Input
+            id="manifest-ref"
+            type="text"
+            bind:value={manifestInput}
+            placeholder="64-character hex"
+            spellcheck="false"
+            class="font-mono"
+          />
+        </div>
 
-  .brand .muted {
-    color: var(--muted);
-  }
+        <Dialog.Footer>
+          <Button type="button" variant="ghost" onclick={() => (settingsOpen = false)}>
+            Cancel
+          </Button>
+          <Button type="submit">Save</Button>
+        </Dialog.Footer>
+      </form>
+    </Dialog.Content>
+  </Dialog.Root>
 
-  .search {
-    display: flex;
-    gap: 0.5rem;
-    flex: 1 1 320px;
-  }
-
-  .search input {
-    flex: 1 1 auto;
-    font-family: var(--mono);
-    font-size: 0.9rem;
-  }
-
-  .gear {
-    white-space: nowrap;
-  }
-
-  .settings-panel {
-    padding: 1rem 1.25rem;
-    background: var(--card);
-    border-bottom: 1px solid var(--border);
-  }
-
-  .settings-panel form {
-    display: grid;
-    grid-template-columns: 1fr 2fr auto;
-    gap: 0.75rem;
-    align-items: end;
-    max-width: 1100px;
-    margin: 0 auto;
-  }
-
-  .settings-panel label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .settings-panel label span {
-    font-size: 0.8rem;
-    color: var(--muted);
-  }
-
-  @media (max-width: 720px) {
-    .settings-panel form {
-      grid-template-columns: 1fr;
-    }
-  }
-</style>
+  {@render children()}
+</div>

@@ -25,10 +25,7 @@ export interface FetchOptions {
 // Index prefixes — must match packages/era/src/swarm.ts.
 export type Index = 'number' | 'hash' | 'tx'
 
-export async function fetchBundleByPath(
-  path: string,
-  opts: FetchOptions,
-): Promise<Uint8Array> {
+export async function fetchBundleByPath(path: string, opts: FetchOptions): Promise<Uint8Array> {
   const url = `${opts.beeUrl}/bzz/${opts.manifestRef}/${path}`
   const res = await fetch(url)
   if (!res.ok) {

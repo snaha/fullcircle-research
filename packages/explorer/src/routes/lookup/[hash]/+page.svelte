@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { page } from '$app/state'
   import { goto } from '$app/navigation'
+  import { page } from '$app/state'
+  import * as Card from '$lib/components/ui/card'
   import { hasManifest, settings } from '$lib/settings.svelte'
 
   let hash = $derived((page.params.hash ?? '').toLowerCase())
@@ -48,29 +49,13 @@
   })
 </script>
 
-<main>
-  <p class="muted">Resolving {hash}…</p>
+<main class="mx-auto flex max-w-3xl flex-col gap-4 px-5 py-10">
+  <p class="break-all font-mono text-sm text-muted-foreground">Resolving {hash}…</p>
   {#if error}
-    <p class="error">{error}</p>
+    <Card.Root class="border-destructive/50">
+      <Card.Content>
+        <p class="font-mono text-sm text-destructive">{error}</p>
+      </Card.Content>
+    </Card.Root>
   {/if}
 </main>
-
-<style>
-  main {
-    max-width: 860px;
-    margin: 0 auto;
-    padding: 2rem 1.25rem;
-  }
-
-  .muted {
-    color: var(--muted);
-    font-family: var(--mono);
-    font-size: 0.9rem;
-  }
-
-  .error {
-    color: var(--error);
-    font-family: var(--mono);
-    font-size: 0.9rem;
-  }
-</style>
