@@ -234,6 +234,23 @@ vs. the [erae spec page](https://hackmd.io/pIZlxnitSciV5wUgW6W20w):
 - Payloads are snappy **framed** (stream identifier + chunked with CRC32C),
   not raw snappy. A small framed decoder is inlined in `erae.ts`.
 
+## Local Bee node
+
+A local Swarm cluster (queen + 1 worker) via
+[`@fairdatasociety/fdp-play`](https://www.npmjs.com/package/@fairdatasociety/fdp-play).
+Requires Docker.
+
+```bash
+pnpm bee:start          # queen + 1 worker, foreground (streams logs)
+pnpm bee:start:detach   # same, background
+pnpm bee:stop           # stop cluster
+pnpm bee:logs           # follow queen logs
+pnpm bee:fresh          # clean start: purge data + pull latest images
+```
+
+Endpoints: queen API at `http://localhost:1633`, worker 1 at
+`http://localhost:11633`, local blockchain RPC at `http://localhost:9545`.
+
 ## Scripts
 
 - `pnpm run typecheck` — `tsc -b`
@@ -241,6 +258,7 @@ vs. the [erae spec page](https://hackmd.io/pIZlxnitSciV5wUgW6W20w):
 - `pnpm era:download [range|url]` — fetch only
 - `pnpm era:process [range|url]` — parse cached files only
 - `pnpm era:download-and-process [range|url]` — both
+- `pnpm bee:start` / `bee:stop` / `bee:logs` / `bee:fresh` — local Bee cluster
 
 ## Dependencies
 

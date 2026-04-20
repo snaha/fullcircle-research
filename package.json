@@ -14,9 +14,15 @@
     "rpc:start": "pnpm --filter @fullcircle/rpc run start",
     "demo:dev": "pnpm --filter @fullcircle/demo run dev",
     "demo:build": "pnpm --filter @fullcircle/demo run build",
+    "bee:start": "fdp-play start -w 1",
+    "bee:start:detach": "fdp-play start -w 1 --detach",
+    "bee:stop": "fdp-play stop",
+    "bee:logs": "fdp-play logs queen --follow",
+    "bee:fresh": "fdp-play start -w 1 --fresh --pull",
     "test": "pnpm -r run test"
   },
   "devDependencies": {
+    "@fairdatasociety/fdp-play": "^3.3.0",
     "@types/node": "^25.6.0",
     "tsx": "^4.21.0",
     "typescript": "^5.5.0"
