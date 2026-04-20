@@ -16,3 +16,16 @@ export {
   type UploadResult,
   type UploadOptions,
 } from './swarm.js'
+
+export {
+  encodeBlockBundle,
+  decodeBlockBundle,
+  decodeBlockHeader,
+  decodeBlockBody,
+  decodeTransaction,
+  hashBlockHeader,
+  type BlockBundle,
+  type DecodedHeader,
+  type DecodedBody,
+  type DecodedTransaction,
+} from './bundle.js'
