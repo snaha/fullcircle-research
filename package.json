@@ -1,0 +1,20 @@
+{
+  "name": "fullcircle-research",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@ethereumjs/rlp": "^5.0.2",
+    "@noble/hashes": "^1.4.0",
+    "snappyjs": "^0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.0"
+  }
+}
