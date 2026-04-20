@@ -1,8 +1,18 @@
 <script lang="ts">
   import { page } from '$app/state'
-  import { formatEth, formatGwei, formatTimestamp, hexByteLength, relativeTime, shortHash } from '$lib/format'
+  import { Badge } from '$lib/components/ui/badge'
+  import * as Card from '$lib/components/ui/card'
+  import {
+    formatEth,
+    formatGwei,
+    formatTimestamp,
+    hexByteLength,
+    relativeTime,
+    shortHash,
+  } from '$lib/format'
   import { hasManifest, settings } from '$lib/settings.svelte'
   import { fetchBlock, type FetchedBlock } from '$lib/swarm'
+  import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
 
   let id = $derived(page.params.id ?? '')
   let index = $derived<'number' | 'hash'>(/^\d+$/.test(id) ? 'number' : 'hash')
@@ -44,255 +54,174 @@
   }
 </script>
 
-<main>
-  <nav class="crumbs">
-    <a href="/">Home</a>
-    <span class="sep">›</span>
-    <span>Block {id}</span>
+<main class="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8">
+  <nav class="flex items-center gap-1 text-sm text-muted-foreground">
+    <a href="/" class="hover:text-foreground">Home</a>
+    <ChevronRightIcon class="size-4" />
+    <span class="text-foreground">Block {id}</span>
   </nav>
 
   {#if loading}
-    <p class="muted">Loading block…</p>
+    <p class="text-sm text-muted-foreground">Loading block…</p>
   {:else if error}
-    <p class="error">{error}</p>
+    <Card.Root class="border-destructive/50">
+      <Card.Content>
+        <p class="font-mono text-sm text-destructive">{error}</p>
+      </Card.Content>
+    </Card.Root>
   {:else if block}
     {@const h = block.header}
-    <header class="block-head">
-      <h1>Block <span class="mono">#{h.number}</span></h1>
-      <p class="muted mono break">{block.hash}</p>
-      <p class="muted">
-        {formatTimestamp(h.timestamp)}
-        <span class="sep">·</span>
-        {relativeTime(h.timestamp)}
+    <header class="flex flex-col gap-2">
+      <div class="flex items-baseline gap-3 flex-wrap">
+        <h1 class="text-2xl font-semibold tracking-tight">
+          Block <span class="font-mono">#{h.number}</span>
+        </h1>
+        <Badge variant="secondary">{block.body.transactions.length} txs</Badge>
+      </div>
+      <p class="break-all font-mono text-sm text-muted-foreground">{block.hash}</p>
+      <p class="text-sm text-muted-foreground">
+        {formatTimestamp(h.timestamp)} · {relativeTime(h.timestamp)}
       </p>
     </header>
 
-    <section class="card">
-      <h2>Overview</h2>
-      <dl>
-        <dt>Block height</dt>
-        <dd class="mono">{h.number}</dd>
+    <Card.Root>
+      <Card.Header>
+        <Card.Title>Overview</Card.Title>
+      </Card.Header>
+      <Card.Content>
+        <dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2.5 text-sm">
+          <dt class="text-muted-foreground">Block height</dt>
+          <dd class="font-mono">{h.number}</dd>
 
-        <dt>Timestamp</dt>
-        <dd class="mono">{formatTimestamp(h.timestamp)} ({h.timestamp})</dd>
+          <dt class="text-muted-foreground">Timestamp</dt>
+          <dd class="font-mono">
+            {formatTimestamp(h.timestamp)}
+            <span class="text-muted-foreground">({h.timestamp})</span>
+          </dd>
 
-        <dt>Transactions</dt>
-        <dd class="mono">{block.body.transactions.length}</dd>
+          <dt class="text-muted-foreground">Transactions</dt>
+          <dd class="font-mono">{block.body.transactions.length}</dd>
 
-        <dt>Miner / fee recipient</dt>
-        <dd class="mono break">{h.miner}</dd>
+          <dt class="text-muted-foreground">Miner</dt>
+          <dd class="break-all font-mono">{h.miner}</dd>
 
-        <dt>Gas used / limit</dt>
-        <dd class="mono">
-          {h.gasUsed.toLocaleString()} / {h.gasLimit.toLocaleString()}
-          {#if h.gasLimit > 0n}
-            <span class="muted">({Number((h.gasUsed * 10000n) / h.gasLimit) / 100}%)</span>
+          <dt class="text-muted-foreground">Gas used / limit</dt>
+          <dd class="font-mono">
+            {h.gasUsed.toLocaleString()} / {h.gasLimit.toLocaleString()}
+            {#if h.gasLimit > 0n}
+              <span class="text-muted-foreground"
+                >({Number((h.gasUsed * 10000n) / h.gasLimit) / 100}%)</span
+              >
+            {/if}
+          </dd>
+
+          {#if h.baseFeePerGas !== undefined}
+            <dt class="text-muted-foreground">Base fee</dt>
+            <dd class="font-mono">{formatGwei(h.baseFeePerGas)}</dd>
           {/if}
-        </dd>
 
-        {#if h.baseFeePerGas !== undefined}
-          <dt>Base fee</dt>
-          <dd class="mono">{formatGwei(h.baseFeePerGas)}</dd>
-        {/if}
+          <dt class="text-muted-foreground">Difficulty</dt>
+          <dd class="font-mono">{h.difficulty.toLocaleString()}</dd>
 
-        <dt>Difficulty</dt>
-        <dd class="mono">{h.difficulty.toLocaleString()}</dd>
+          {#if block.totalDifficulty !== null}
+            <dt class="text-muted-foreground">Total difficulty</dt>
+            <dd class="font-mono">{block.totalDifficulty.toLocaleString()}</dd>
+          {/if}
 
-        {#if block.totalDifficulty !== null}
-          <dt>Total difficulty</dt>
-          <dd class="mono">{block.totalDifficulty.toLocaleString()}</dd>
-        {/if}
+          <dt class="text-muted-foreground">Parent hash</dt>
+          <dd class="break-all font-mono">
+            {#if h.number > 0n}
+              <a href="/block/{h.number - 1n}" class="underline hover:no-underline"
+                >{h.parentHash}</a
+              >
+            {:else}
+              {h.parentHash}
+            {/if}
+          </dd>
 
-        {#if h.number > 0n}
-          <dt>Parent hash</dt>
-          <dd class="mono break"><a href="/block/{h.number - 1n}">{h.parentHash}</a></dd>
+          <dt class="text-muted-foreground">State root</dt>
+          <dd class="break-all font-mono">{h.stateRoot}</dd>
+
+          <dt class="text-muted-foreground">Transactions root</dt>
+          <dd class="break-all font-mono">{h.transactionsRoot}</dd>
+
+          <dt class="text-muted-foreground">Receipts root</dt>
+          <dd class="break-all font-mono">{h.receiptsRoot}</dd>
+
+          <dt class="text-muted-foreground">Nonce</dt>
+          <dd class="font-mono">{h.nonce}</dd>
+
+          <dt class="text-muted-foreground">Extra data</dt>
+          <dd class="break-all font-mono">
+            {h.extraData}
+            <span class="text-muted-foreground">({hexByteLength(h.extraData)} bytes)</span>
+          </dd>
+
+          {#if h.withdrawalsRoot !== undefined}
+            <dt class="text-muted-foreground">Withdrawals root</dt>
+            <dd class="break-all font-mono">{h.withdrawalsRoot}</dd>
+          {/if}
+          {#if h.blobGasUsed !== undefined}
+            <dt class="text-muted-foreground">Blob gas used</dt>
+            <dd class="font-mono">{h.blobGasUsed.toLocaleString()}</dd>
+          {/if}
+          {#if h.excessBlobGas !== undefined}
+            <dt class="text-muted-foreground">Excess blob gas</dt>
+            <dd class="font-mono">{h.excessBlobGas.toLocaleString()}</dd>
+          {/if}
+        </dl>
+      </Card.Content>
+    </Card.Root>
+
+    <Card.Root>
+      <Card.Header>
+        <Card.Title>Transactions ({block.body.transactions.length})</Card.Title>
+      </Card.Header>
+      <Card.Content class="px-0">
+        {#if block.body.transactions.length === 0}
+          <p class="px-6 text-sm text-muted-foreground">No transactions in this block.</p>
         {:else}
-          <dt>Parent hash</dt>
-          <dd class="mono break">{h.parentHash}</dd>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b text-xs uppercase tracking-wide text-muted-foreground">
+                  <th class="px-6 py-2 text-left font-medium">Hash</th>
+                  <th class="px-3 py-2 text-left font-medium">To</th>
+                  <th class="px-3 py-2 text-left font-medium">Value</th>
+                  <th class="px-3 py-2 text-left font-medium">Gas limit</th>
+                  <th class="px-6 py-2 text-right font-medium">Type</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each block.body.transactions as tx (tx.hash)}
+                  <tr class="border-b last:border-0 hover:bg-muted/50">
+                    <td class="px-6 py-2 font-mono">
+                      <a
+                        href="/tx/{tx.hash}"
+                        class="text-primary underline-offset-4 hover:underline"
+                      >
+                        {shortHash(tx.hash)}
+                      </a>
+                    </td>
+                    <td class="px-3 py-2 font-mono">
+                      {#if tx.to === null}
+                        <span class="text-muted-foreground">contract creation</span>
+                      {:else}
+                        {shortHash(tx.to, 10, 6)}
+                      {/if}
+                    </td>
+                    <td class="px-3 py-2 font-mono">{formatEth(tx.value)}</td>
+                    <td class="px-3 py-2 font-mono">{tx.gasLimit.toLocaleString()}</td>
+                    <td class="px-6 py-2 text-right">
+                      <Badge variant="outline" class="font-mono">{txTypeLabel(tx.type)}</Badge>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
-
-        <dt>State root</dt>
-        <dd class="mono break">{h.stateRoot}</dd>
-
-        <dt>Transactions root</dt>
-        <dd class="mono break">{h.transactionsRoot}</dd>
-
-        <dt>Receipts root</dt>
-        <dd class="mono break">{h.receiptsRoot}</dd>
-
-        <dt>Nonce</dt>
-        <dd class="mono">{h.nonce}</dd>
-
-        <dt>Extra data</dt>
-        <dd class="mono break">
-          {h.extraData}
-          <span class="muted">({hexByteLength(h.extraData)} bytes)</span>
-        </dd>
-
-        {#if h.withdrawalsRoot !== undefined}
-          <dt>Withdrawals root</dt>
-          <dd class="mono break">{h.withdrawalsRoot}</dd>
-        {/if}
-        {#if h.blobGasUsed !== undefined}
-          <dt>Blob gas used</dt>
-          <dd class="mono">{h.blobGasUsed.toLocaleString()}</dd>
-        {/if}
-        {#if h.excessBlobGas !== undefined}
-          <dt>Excess blob gas</dt>
-          <dd class="mono">{h.excessBlobGas.toLocaleString()}</dd>
-        {/if}
-      </dl>
-    </section>
-
-    <section class="card">
-      <h2>Transactions ({block.body.transactions.length})</h2>
-      {#if block.body.transactions.length === 0}
-        <p class="muted">No transactions in this block.</p>
-      {:else}
-        <table>
-          <thead>
-            <tr>
-              <th>Hash</th>
-              <th>To</th>
-              <th>Value</th>
-              <th>Gas limit</th>
-              <th class="t-right">Type</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each block.body.transactions as tx (tx.hash)}
-              <tr>
-                <td class="mono">
-                  <a href="/tx/{tx.hash}">{shortHash(tx.hash)}</a>
-                </td>
-                <td class="mono">
-                  {#if tx.to === null}
-                    <span class="muted">contract creation</span>
-                  {:else}
-                    {shortHash(tx.to, 10, 6)}
-                  {/if}
-                </td>
-                <td class="mono">{formatEth(tx.value)}</td>
-                <td class="mono">{tx.gasLimit.toLocaleString()}</td>
-                <td class="t-right mono">{txTypeLabel(tx.type)}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-    </section>
+      </Card.Content>
+    </Card.Root>
   {/if}
 </main>
-
-<style>
-  main {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 1.5rem 1.25rem 4rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
-
-  .crumbs {
-    font-size: 0.85rem;
-    color: var(--muted);
-    display: flex;
-    gap: 0.4rem;
-  }
-
-  .block-head h1 {
-    margin: 0 0 0.25rem;
-  }
-
-  .block-head p {
-    margin: 0.25rem 0 0;
-  }
-
-  .muted {
-    color: var(--muted);
-  }
-
-  .error {
-    color: var(--error);
-    font-family: var(--mono);
-    font-size: 0.9rem;
-  }
-
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.25rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .card h2 {
-    margin: 0;
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-  }
-
-  dl {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.4rem 1rem;
-    margin: 0;
-  }
-
-  dt {
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-
-  dd {
-    margin: 0;
-  }
-
-  .mono {
-    font-family: var(--mono);
-    font-size: 0.9rem;
-  }
-
-  .break {
-    word-break: break-all;
-  }
-
-  .sep {
-    color: var(--muted);
-  }
-
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    font-size: 0.85rem;
-  }
-
-  th,
-  td {
-    text-align: left;
-    padding: 0.5rem 0.6rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-
-  th {
-    font-weight: 600;
-    color: var(--muted);
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .t-right {
-    text-align: right;
-  }
-
-  tbody tr:last-child td {
-    border-bottom: none;
-  }
-</style>

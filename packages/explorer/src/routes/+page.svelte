@@ -1,114 +1,83 @@
 <script lang="ts">
+  import { Badge } from '$lib/components/ui/badge'
+  import { Button } from '$lib/components/ui/button'
+  import * as Card from '$lib/components/ui/card'
   import { hasManifest, settings } from '$lib/settings.svelte'
+  import ArrowRightIcon from '@lucide/svelte/icons/arrow-right'
 </script>
 
-<main>
-  <section class="hero">
-    <h1>FullCircle block explorer</h1>
-    <p class="muted">
-      Browse Ethereum blocks served from Swarm. Block data is fetched directly from a Bee
-      gateway through a Mantaray manifest uploaded by
-      <code>@fullcircle/era</code>.
+<main class="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-10">
+  <section class="flex flex-col gap-2">
+    <h1 class="text-3xl font-semibold tracking-tight">FullCircle block explorer</h1>
+    <p class="max-w-2xl text-muted-foreground">
+      Browse Ethereum blocks served from Swarm. Block data is fetched directly from a Bee gateway
+      through a Mantaray manifest uploaded by <code
+        class="rounded bg-muted px-1.5 py-0.5 font-mono text-sm">@fullcircle/era</code
+      >.
     </p>
   </section>
 
-  <section class="card">
-    <h2>Current source</h2>
-    {#if hasManifest()}
-      <dl>
-        <dt>Bee gateway</dt>
-        <dd class="mono">{settings.beeUrl}</dd>
-        <dt>Manifest</dt>
-        <dd class="mono break">{settings.manifestRef}</dd>
-      </dl>
-      <p class="muted">Use the search bar above — try block <a href="/block/0">0</a>.</p>
-    {:else}
-      <p>
-        Open <strong>Settings</strong> and paste the manifest reference printed by
-        <code>pnpm era:upload</code>.
-      </p>
-    {/if}
-  </section>
+  <div class="grid gap-4 md:grid-cols-2">
+    <Card.Root>
+      <Card.Header>
+        <Card.Title>Current source</Card.Title>
+        <Card.Description>Where this explorer is reading from.</Card.Description>
+      </Card.Header>
+      <Card.Content>
+        {#if hasManifest()}
+          <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="text-muted-foreground">Bee gateway</dt>
+            <dd class="font-mono break-all">{settings.beeUrl}</dd>
+            <dt class="text-muted-foreground">Manifest</dt>
+            <dd class="font-mono break-all">{settings.manifestRef}</dd>
+          </dl>
+        {:else}
+          <p class="text-sm text-muted-foreground">
+            Open <Badge variant="outline">Settings</Badge> and paste the manifest reference printed by
+            <code class="font-mono">pnpm era:upload</code>.
+          </p>
+        {/if}
+      </Card.Content>
+      {#if hasManifest()}
+        <Card.Footer>
+          <Button href="/block/0" variant="secondary" size="sm">
+            Jump to block 0
+            <ArrowRightIcon />
+          </Button>
+        </Card.Footer>
+      {/if}
+    </Card.Root>
 
-  <section class="card">
-    <h2>What's here</h2>
-    <ul>
-      <li>Block details by number (e.g. <a href="/block/1000">1000</a>) or hash.</li>
-      <li>Transaction list per block, decoded client-side from the bundled body.</li>
-      <li>Transaction detail pages (<code>/tx/&lt;hash&gt;</code>) with value, gas, and input data.</li>
-    </ul>
-  </section>
+    <Card.Root>
+      <Card.Header>
+        <Card.Title>What's here</Card.Title>
+        <Card.Description>Everything the manifest currently serves.</Card.Description>
+      </Card.Header>
+      <Card.Content>
+        <ul class="flex flex-col gap-2 text-sm">
+          <li class="flex items-start gap-2">
+            <span class="mt-1 size-1.5 rounded-full bg-primary"></span>
+            <span>
+              Block details by number (e.g. <a
+                href="/block/1000"
+                class="underline hover:no-underline">1000</a
+              >) or hash.
+            </span>
+          </li>
+          <li class="flex items-start gap-2">
+            <span class="mt-1 size-1.5 rounded-full bg-primary"></span>
+            <span>Transaction list per block, decoded client-side from the bundled body.</span>
+          </li>
+          <li class="flex items-start gap-2">
+            <span class="mt-1 size-1.5 rounded-full bg-primary"></span>
+            <span>
+              Transaction detail pages (<code class="rounded bg-muted px-1 font-mono text-xs"
+                >/tx/&lt;hash&gt;</code
+              >) with value, gas, and input data.
+            </span>
+          </li>
+        </ul>
+      </Card.Content>
+    </Card.Root>
+  </div>
 </main>
-
-<style>
-  main {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 2rem 1.25rem 4rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
-
-  .hero h1 {
-    margin: 0 0 0.25rem;
-    font-size: 1.75rem;
-  }
-
-  .hero p {
-    margin: 0;
-    max-width: 720px;
-  }
-
-  .muted {
-    color: var(--muted);
-  }
-
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.25rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .card h2 {
-    margin: 0;
-    font-size: 1rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-  }
-
-  dl {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.35rem 1rem;
-    margin: 0;
-  }
-
-  dt {
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-
-  dd {
-    margin: 0;
-  }
-
-  .mono {
-    font-family: var(--mono);
-    font-size: 0.9rem;
-  }
-
-  .break {
-    word-break: break-all;
-  }
-
-  ul {
-    margin: 0;
-    padding-left: 1.25rem;
-  }
-</style>
