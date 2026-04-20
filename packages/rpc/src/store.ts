@@ -27,6 +27,7 @@ export interface BlockRecord {
   totalDifficulty: bigint | null
   txHashes: string[] // 0x-prefixed
   rawHeader: Uint8Array
+  rawBody: Uint8Array
 }
 
 interface RawBlockLine {
@@ -184,6 +185,7 @@ function toBlockRecord(row: RawBlockLine): BlockRecord {
     totalDifficulty: row.totalDifficulty ? BigInt(row.totalDifficulty) : null,
     txHashes: row.txHashes,
     rawHeader: hexToBytes(row.rawHeader),
+    rawBody: hexToBytes(row.rawBody),
   }
 }
 

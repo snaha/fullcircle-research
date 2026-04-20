@@ -1,8 +1,15 @@
 // JSON-RPC method handlers. Each handler validates params, resolves a block
 // through the DataStore, and returns a viem-compatible response.
 
+import { RLP } from '@ethereumjs/rlp'
+
 import { blockToRpc, type RpcBlock } from './block.js'
 import type { BlockRecord, DataStore } from './store.js'
+
+// Mainnet only today. When we add other chains, surface this via an env var
+// and thread it through the server options.
+const CHAIN_ID = '0x1'
+const CLIENT_VERSION = 'fullcircle-rpc/0.0.1'
 
 export class RpcError extends Error {
   constructor(public code: number, message: string) {
@@ -65,6 +72,54 @@ export async function ethGetBlockTransactionCountByHash(
   return '0x' + block.txHashes.length.toString(16)
 }
 
+export async function ethGetUncleCountByBlockNumber(
+  store: DataStore,
+  params: RpcParams,
+): Promise<string | null> {
+  const [tag] = validateBlockByNumberParams(params)
+  const number = resolveBlockTag(store, tag)
+  if (number === null) return null
+  const block = await store.readBlockByNumber(number)
+  if (!block) return null
+  return uncleCountHex(block)
+}
+
+export async function ethGetUncleCountByBlockHash(
+  store: DataStore,
+  params: RpcParams,
+): Promise<string | null> {
+  const [hash] = validateBlockByHashParams(params)
+  const block = await store.readBlockByHash(hash)
+  if (!block) return null
+  return uncleCountHex(block)
+}
+
+// ---------- zero-param / constant handlers ----------
+
+export async function ethChainId(_store: DataStore, _params: RpcParams): Promise<string> {
+  return CHAIN_ID
+}
+
+export async function netVersion(_store: DataStore, _params: RpcParams): Promise<string> {
+  // net_version historically returns the chain ID as a decimal string.
+  return BigInt(CHAIN_ID).toString()
+}
+
+export async function web3ClientVersion(
+  _store: DataStore,
+  _params: RpcParams,
+): Promise<string> {
+  return CLIENT_VERSION
+}
+
+export async function ethSyncing(
+  _store: DataStore,
+  _params: RpcParams,
+): Promise<false> {
+  // We only serve archived history — never syncing.
+  return false
+}
+
 // ---------- param validation ----------
 
 function validateBlockByNumberParams(params: RpcParams): [string, boolean] {
@@ -107,6 +162,16 @@ function resolveBlockTag(store: DataStore, tag: string): bigint | null {
     throw new RpcError(INVALID_PARAMS, `invalid block tag: ${tag}`)
   }
   return BigInt(tag)
+}
+
+function uncleCountHex(block: BlockRecord): string {
+  // Body RLP is [transactions, uncles, (withdrawals?)]. uncles is a list of
+  // RLP-encoded headers; we only need the length.
+  const body = RLP.decode(block.rawBody) as unknown
+  if (!Array.isArray(body) || body.length < 2 || !Array.isArray(body[1])) {
+    throw new RpcError(-32603, 'could not decode body to count uncles')
+  }
+  return '0x' + body[1].length.toString(16)
 }
 
 function shapeBlock(block: BlockRecord, fullTx: boolean): RpcBlock {

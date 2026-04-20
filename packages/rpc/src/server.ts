@@ -5,11 +5,17 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import {
   ethBlockNumber,
+  ethChainId,
   ethGetBlockByHash,
   ethGetBlockByNumber,
   ethGetBlockTransactionCountByHash,
   ethGetBlockTransactionCountByNumber,
+  ethGetUncleCountByBlockHash,
+  ethGetUncleCountByBlockNumber,
+  ethSyncing,
+  netVersion,
   RpcError,
+  web3ClientVersion,
   type RpcParams,
 } from './handlers.js'
 import type { DataStore } from './store.js'
@@ -18,10 +24,16 @@ type Handler = (store: DataStore, params: RpcParams) => Promise<unknown>
 
 const METHODS: Record<string, Handler> = {
   eth_blockNumber: ethBlockNumber,
+  eth_chainId: ethChainId,
   eth_getBlockByNumber: ethGetBlockByNumber,
   eth_getBlockByHash: ethGetBlockByHash,
   eth_getBlockTransactionCountByNumber: ethGetBlockTransactionCountByNumber,
   eth_getBlockTransactionCountByHash: ethGetBlockTransactionCountByHash,
+  eth_getUncleCountByBlockNumber: ethGetUncleCountByBlockNumber,
+  eth_getUncleCountByBlockHash: ethGetUncleCountByBlockHash,
+  eth_syncing: ethSyncing,
+  net_version: netVersion,
+  web3_clientVersion: web3ClientVersion,
 }
 
 interface JsonRpcRequest {
