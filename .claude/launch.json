@@ -12,6 +12,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@fullcircle/demo", "dev"],
       "port": 5317
+    },
+    {
+      "name": "explorer",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@fullcircle/explorer", "dev"],
+      "port": 5318
     }
   ]
 }

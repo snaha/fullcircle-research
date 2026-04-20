@@ -1,15 +1,17 @@
 // Swarm upload logic for Ethereum block data.
 //
-// Uploads block rawBody data to Swarm and builds a unified Mantaray manifest
-// with three index prefixes:
-//   /number/<blockNumber> -> block data
-//   /hash/<blockHash>     -> block data
-//   /tx/<txHash>          -> block data
+// Uploads a per-block bundle (RLP-encoded [rawHeader, rawBody, rawReceipts,
+// totalDifficulty]) and builds a unified Mantaray manifest with three index
+// prefixes:
+//   /number/<blockNumber> -> block bundle
+//   /hash/<blockHash>     -> block bundle
+//   /tx/<txHash>          -> block bundle (containing that tx)
 
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { Bee } from '@ethersphere/bee-js'
 import MantarayJs from 'mantaray-js'
+import { encodeBlockBundle } from './bundle.js'
 
 const { MantarayNode, Utils } = MantarayJs
 
@@ -21,8 +23,11 @@ type Reference = Uint8Array & { length: 32 | 64 }
 export interface BlockRecord {
   number: string
   hash: string
+  totalDifficulty: string | null
   txHashes: string[]
+  rawHeader: string
   rawBody: string
+  rawReceipts: string
 }
 
 export interface UploadResult {
@@ -73,9 +78,12 @@ export async function* readBlocksNdjson(
  * Upload all blocks from a blocks.ndjson file and build a unified manifest.
  *
  * The manifest has three index prefixes:
- *   - /number/<blockNumber> -> Swarm reference of block rawBody
- *   - /hash/<blockHash>     -> Swarm reference of block rawBody
- *   - /tx/<txHash>          -> Swarm reference of block rawBody
+ *   - /number/<blockNumber> -> Swarm reference of the block bundle
+ *   - /hash/<blockHash>     -> Swarm reference of the block bundle
+ *   - /tx/<txHash>          -> Swarm reference of the block bundle containing the tx
+ *
+ * The bundle is `encodeBlockBundle(...)` — one fetch returns header, body,
+ * receipts, and totalDifficulty for a block.
  *
  * Returns a single manifest reference that serves all three indexes.
  */
@@ -94,9 +102,15 @@ export async function uploadBlocksAndBuildManifest(
   let txHashesIndexed = 0
 
   for await (const block of readBlocksNdjson(blocksPath)) {
-    // Upload rawBody bytes
-    const bodyBytes = hexToBytes(block.rawBody)
-    const uploadResult = await bee.uploadData(options.batchId, bodyBytes)
+    // Encode the bundle: header + body + receipts + totalDifficulty
+    const bundleBytes = encodeBlockBundle({
+      rawHeader: hexToBytes(block.rawHeader),
+      rawBody: hexToBytes(block.rawBody),
+      rawReceipts: hexToBytes(block.rawReceipts),
+      totalDifficulty:
+        block.totalDifficulty === null ? null : BigInt(block.totalDifficulty),
+    })
+    const uploadResult = await bee.uploadData(options.batchId, bundleBytes)
     const ref = hexToBytes(uploadResult.reference) as Reference
 
     // Add to manifest under /number/<blockNumber>

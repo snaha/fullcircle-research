@@ -14,6 +14,8 @@
     "rpc:start": "pnpm --filter @fullcircle/rpc run start",
     "demo:dev": "pnpm --filter @fullcircle/demo run dev",
     "demo:build": "pnpm --filter @fullcircle/demo run build",
+    "explorer:dev": "pnpm --filter @fullcircle/explorer run dev",
+    "explorer:build": "pnpm --filter @fullcircle/explorer run build",
     "bee:start": "fdp-play start -w 1",
     "bee:start:detach": "fdp-play start -w 1 --detach",
     "bee:stop": "fdp-play stop",
