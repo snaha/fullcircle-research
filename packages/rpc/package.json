@@ -1,0 +1,23 @@
+{
+  "name": "@fullcircle/rpc",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/bin.ts",
+    "start": "tsx src/bin.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@ethereumjs/rlp": "^5.0.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
