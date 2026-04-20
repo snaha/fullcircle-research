@@ -60,10 +60,7 @@ export interface EraeIndex {
  * Download an erae file as bytes. Pure in the sense that the output depends
  * only on the URL + network state; no local side effects.
  */
-export async function fetchEraeFile(
-  url: string,
-  init?: RequestInit,
-): Promise<Uint8Array> {
+export async function fetchEraeFile(url: string, init?: RequestInit): Promise<Uint8Array> {
   const res = await fetch(url, init)
   if (!res.ok) {
     throw new Error(`fetchEraeFile: ${res.status} ${res.statusText} for ${url}`)
@@ -80,9 +77,7 @@ export function parseEraeFile(data: Uint8Array): EraeFile {
 
   const first = records[0]
   if (first.type !== ERAE_TYPE.Version) {
-    throw new Error(
-      `parseEraeFile: missing Version record (got 0x${first.type.toString(16)})`,
-    )
+    throw new Error(`parseEraeFile: missing Version record (got 0x${first.type.toString(16)})`)
   }
 
   // Records in an erae file are grouped by TYPE, not interleaved per block:
@@ -129,9 +124,7 @@ export function parseEraeFile(data: Uint8Array): EraeFile {
 
   const { startingBlock, count } = parseBlockIndex(blockIndexRecord)
   if (headers.length !== count) {
-    throw new Error(
-      `parseEraeFile: ${headers.length} headers vs BlockIndex count ${count}`,
-    )
+    throw new Error(`parseEraeFile: ${headers.length} headers vs BlockIndex count ${count}`)
   }
   if (bodies.length !== count || receipts.length !== count) {
     throw new Error(
@@ -220,9 +213,7 @@ function readAllRecords(data: Uint8Array): E2Record[] {
     const start = off + 8
     const end = start + length
     if (end > data.length) {
-      throw new Error(
-        `readAllRecords: record of len ${length} overruns file at offset ${off}`,
-      )
+      throw new Error(`readAllRecords: record of len ${length} overruns file at offset ${off}`)
     }
     out.push({ type, data: data.subarray(start, end), offset: off })
     off = end
@@ -232,9 +223,7 @@ function readAllRecords(data: Uint8Array): E2Record[] {
 
 // ---------- Internal: BlockIndex record ----------
 
-function parseBlockIndex(
-  record: Uint8Array | undefined,
-): { startingBlock: bigint; count: number } {
+function parseBlockIndex(record: Uint8Array | undefined): { startingBlock: bigint; count: number } {
   if (!record) throw new Error('parseBlockIndex: BlockIndex record missing')
   if (record.length < 16 || record.length % 8 !== 0) {
     throw new Error(`parseBlockIndex: bad length ${record.length}`)
@@ -352,9 +341,7 @@ function snappyFramedDecode(input: Uint8Array): Uint8Array {
     } else if (kind === 0xfe || (kind >= 0x80 && kind <= 0xfd)) {
       // padding or skippable — ignore
     } else {
-      throw new Error(
-        `snappyFramedDecode: unskippable reserved chunk type 0x${kind.toString(16)}`,
-      )
+      throw new Error(`snappyFramedDecode: unskippable reserved chunk type 0x${kind.toString(16)}`)
     }
     off = payloadEnd
   }

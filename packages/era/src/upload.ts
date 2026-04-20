@@ -90,7 +90,9 @@ for (const t of targets) {
   }
   await writeFile(manifestPath, JSON.stringify(manifestData, null, 2))
 
-  console.log(`upload ${result.blocksUploaded} blocks, ${result.txHashesIndexed} txs in ${elapsed} ms`)
+  console.log(
+    `upload ${result.blocksUploaded} blocks, ${result.txHashesIndexed} txs in ${elapsed} ms`,
+  )
   console.log(`       manifest: ${result.manifestReference}`)
   console.log(`       written:  ${manifestPath}`)
 }

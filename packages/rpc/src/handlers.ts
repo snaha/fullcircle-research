@@ -12,7 +12,10 @@ const CHAIN_ID = '0x1'
 const CLIENT_VERSION = 'fullcircle-rpc/0.0.1'
 
 export class RpcError extends Error {
-  constructor(public code: number, message: string) {
+  constructor(
+    public code: number,
+    message: string,
+  ) {
     super(message)
   }
 }
@@ -21,10 +24,7 @@ const INVALID_PARAMS = -32602
 
 export type RpcParams = unknown[]
 
-export async function ethBlockNumber(
-  store: DataStore,
-  _params: RpcParams,
-): Promise<string> {
+export async function ethBlockNumber(store: DataStore, _params: RpcParams): Promise<string> {
   return '0x' + store.latestBlockNumber.toString(16)
 }
 
@@ -105,17 +105,11 @@ export async function netVersion(_store: DataStore, _params: RpcParams): Promise
   return BigInt(CHAIN_ID).toString()
 }
 
-export async function web3ClientVersion(
-  _store: DataStore,
-  _params: RpcParams,
-): Promise<string> {
+export async function web3ClientVersion(_store: DataStore, _params: RpcParams): Promise<string> {
   return CLIENT_VERSION
 }
 
-export async function ethSyncing(
-  _store: DataStore,
-  _params: RpcParams,
-): Promise<false> {
+export async function ethSyncing(_store: DataStore, _params: RpcParams): Promise<false> {
   // We only serve archived history — never syncing.
   return false
 }

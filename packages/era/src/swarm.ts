@@ -61,9 +61,7 @@ export function hexToBytes(hex: string): Uint8Array {
 /**
  * Stream block records from an ndjson file.
  */
-export async function* readBlocksNdjson(
-  path: string,
-): AsyncGenerator<BlockRecord> {
+export async function* readBlocksNdjson(path: string): AsyncGenerator<BlockRecord> {
   const rl = createInterface({
     input: createReadStream(path, 'utf8'),
     crlfDelay: Infinity,
@@ -119,36 +117,29 @@ export async function uploadBlocksAndBuildManifest(
       rawHeader: hexToBytes(block.rawHeader),
       rawBody: hexToBytes(block.rawBody),
       rawReceipts: hexToBytes(block.rawReceipts),
-      totalDifficulty:
-        block.totalDifficulty === null ? null : BigInt(block.totalDifficulty),
+      totalDifficulty: block.totalDifficulty === null ? null : BigInt(block.totalDifficulty),
     })
     const uploadResult = await bee.uploadData(options.batchId, bundleBytes)
     const ref = hexToBytes(uploadResult.reference) as Reference
 
     // Add to manifest under /number/<blockNumber>
-    manifest.addFork(
-      textEncoder.encode(`number/${block.number}`),
-      ref,
-      { 'Content-Type': 'application/octet-stream' },
-    )
+    manifest.addFork(textEncoder.encode(`number/${block.number}`), ref, {
+      'Content-Type': 'application/octet-stream',
+    })
 
     // Add to manifest under /hash/<blockHash>
     // Keep the 0x prefix and lowercase for consistency with standard Ethereum hex encoding
     const normalizedHash = block.hash.toLowerCase()
-    manifest.addFork(
-      textEncoder.encode(`hash/${normalizedHash}`),
-      ref,
-      { 'Content-Type': 'application/octet-stream' },
-    )
+    manifest.addFork(textEncoder.encode(`hash/${normalizedHash}`), ref, {
+      'Content-Type': 'application/octet-stream',
+    })
 
     // Add to manifest under /tx/<txHash> for each transaction
     for (const txHash of block.txHashes) {
       const normalizedTx = txHash.toLowerCase()
-      manifest.addFork(
-        textEncoder.encode(`tx/${normalizedTx}`),
-        ref,
-        { 'Content-Type': 'application/octet-stream' },
-      )
+      manifest.addFork(textEncoder.encode(`tx/${normalizedTx}`), ref, {
+        'Content-Type': 'application/octet-stream',
+      })
       txHashesIndexed++
     }
 
@@ -230,7 +221,7 @@ function createUploadQueue(
   return async (data: Uint8Array): Promise<Reference> => {
     // Wait for a slot if at capacity
     while (inFlight >= maxConcurrent) {
-      await new Promise<void>(resolve => waiting.push({ resolve }))
+      await new Promise<void>((resolve) => waiting.push({ resolve }))
     }
 
     inFlight++

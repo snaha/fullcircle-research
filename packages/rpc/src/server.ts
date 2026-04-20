@@ -74,11 +74,7 @@ export function createRpcServer(options: RpcServerOptions): Server {
   })
 }
 
-async function handle(
-  req: IncomingMessage,
-  res: ServerResponse,
-  store: DataStore,
-): Promise<void> {
+async function handle(req: IncomingMessage, res: ServerResponse, store: DataStore): Promise<void> {
   setCorsHeaders(res)
   if (req.method === 'OPTIONS') {
     res.writeHead(204).end()
@@ -103,7 +99,11 @@ async function handle(
 
   if (Array.isArray(body)) {
     const results = await Promise.all(body.map((item) => dispatch(store, item)))
-    writeJson(res, 200, results.filter((r): r is JsonRpcResponse => r !== null))
+    writeJson(
+      res,
+      200,
+      results.filter((r): r is JsonRpcResponse => r !== null),
+    )
     return
   }
 

@@ -73,8 +73,7 @@ export function blockToRpc(block: BlockRecord): RpcBlock {
     mixHash: to32(mixHash),
     nonce: toFixedHex(nonce, 8),
     size: toQuantity(BigInt(block.rawHeader.length)),
-    totalDifficulty:
-      block.totalDifficulty !== null ? toQuantity(block.totalDifficulty) : null,
+    totalDifficulty: block.totalDifficulty !== null ? toQuantity(block.totalDifficulty) : null,
     transactions: block.txHashes as Hash[],
     uncles: [],
   }

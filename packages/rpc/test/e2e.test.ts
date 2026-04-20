@@ -7,12 +7,7 @@ import type { AddressInfo } from 'node:net'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import {
-  createPublicClient,
-  http,
-  type Hash,
-  type PublicClient,
-} from 'viem'
+import { createPublicClient, http, type Hash, type PublicClient } from 'viem'
 import { mainnet } from 'viem/chains'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -24,13 +19,11 @@ const DATA_DIR = resolve(fileURLToPath(import.meta.url), '../../../../data')
 // Known values from the fixture eras 0–7 (mainnet blocks 0 through 65535).
 // Generated once from `data/*.blocks.ndjson` and asserted here so regressions
 // in RLP decoding, hex padding, or index resolution surface immediately.
-const GENESIS_HASH: Hash =
-  '0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3'
+const GENESIS_HASH: Hash = '0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3'
 const FIRST_TX_BLOCK = 46147n
 const FIRST_TX_BLOCK_HASH: Hash =
   '0x4e3a3754410177e6937ef1f84bba68ea139e8d1a2258c5f85db9f1cd715a1bdd'
-const FIRST_TX_HASH: Hash =
-  '0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060'
+const FIRST_TX_HASH: Hash = '0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060'
 const THREE_TX_BLOCK = 47923n
 const THREE_TX_HASHES: Hash[] = [
   '0x354a8619d29a0ca3f61e2a3df9ac8bfb2dca991d757218b24d7a9e425f1518d5',
@@ -118,9 +111,9 @@ describe('eth_getBlockByHash', () => {
   it('returns null for an unknown hash', async () => {
     const unknownHash =
       '0x0000000000000000000000000000000000000000000000000000000000000001' as const
-    await expect(
-      client.getBlock({ blockHash: unknownHash }),
-    ).rejects.toThrowError(/could not be found/i)
+    await expect(client.getBlock({ blockHash: unknownHash })).rejects.toThrowError(
+      /could not be found/i,
+    )
   })
 })
 
@@ -130,24 +123,18 @@ describe('eth_getBlockTransactionCountByNumber', () => {
   })
 
   it('reports one transaction for block 46147', async () => {
-    expect(
-      await client.getBlockTransactionCount({ blockNumber: FIRST_TX_BLOCK }),
-    ).toBe(1)
+    expect(await client.getBlockTransactionCount({ blockNumber: FIRST_TX_BLOCK })).toBe(1)
   })
 
   it('reports three transactions for block 47923', async () => {
-    expect(
-      await client.getBlockTransactionCount({ blockNumber: THREE_TX_BLOCK }),
-    ).toBe(3)
+    expect(await client.getBlockTransactionCount({ blockNumber: THREE_TX_BLOCK })).toBe(3)
   })
 })
 
 describe('eth_getBlockTransactionCountByHash', () => {
   it('reports three transactions for block 47923 by hash', async () => {
     const block = await client.getBlock({ blockNumber: THREE_TX_BLOCK })
-    expect(
-      await client.getBlockTransactionCount({ blockHash: block.hash! }),
-    ).toBe(3)
+    expect(await client.getBlockTransactionCount({ blockHash: block.hash! })).toBe(3)
   })
 })
 
@@ -183,13 +170,13 @@ describe('eth_chainId / net_version / web3_clientVersion', () => {
   })
 
   it('reports net_version as the decimal chain id', async () => {
-    const v = await client.request({ method: 'net_version' as 'net_version' })
+    const v = await client.request({ method: 'net_version' as const })
     expect(v).toBe('1')
   })
 
   it('reports a web3_clientVersion string', async () => {
     const v = await client.request({
-      method: 'web3_clientVersion' as 'web3_clientVersion',
+      method: 'web3_clientVersion' as const,
     })
     expect(v).toMatch(/^fullcircle-rpc\//)
   })

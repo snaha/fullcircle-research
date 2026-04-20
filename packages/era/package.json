@@ -14,8 +14,13 @@
     "process": "tsx src/process.ts",
     "download-and-process": "tsx src/download-and-process.ts",
     "upload": "tsx src/upload.ts",
-    "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "check": "tsc --noEmit",
+    "typecheck": "pnpm check",
+    "build": "tsc",
+    "lint": "prettier --check . && eslint .",
+    "format": "prettier --write . && eslint . --fix",
+    "knip": "knip",
+    "check:all": "pnpm lint && pnpm check && pnpm knip"
   },
   "dependencies": {
     "@ethereumjs/rlp": "^5.0.2",
@@ -25,6 +30,14 @@
     "snappyjs": "^0.7.0"
   },
   "devDependencies": {
-    "tsx": "^4.21.0"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.5.0",
+    "knip": "^6.5.0",
+    "prettier": "^3.8.3",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.0"
   }
 }

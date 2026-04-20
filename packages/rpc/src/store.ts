@@ -71,9 +71,7 @@ export class DataStore {
 
   async load(): Promise<void> {
     const entries = await readdir(this.dataDir)
-    const summaryFiles = entries
-      .filter((f) => f.endsWith('.summary.json'))
-      .sort()
+    const summaryFiles = entries.filter((f) => f.endsWith('.summary.json')).sort()
 
     for (const name of summaryFiles) {
       const summaryPath = resolve(this.dataDir, name)

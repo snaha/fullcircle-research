@@ -61,11 +61,7 @@
   }
 
   function stringify(value: unknown): string {
-    return JSON.stringify(
-      value,
-      (_k, v) => (typeof v === 'bigint' ? v.toString() : v),
-      2,
-    )
+    return JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2)
   }
 
   onMount(() => {
@@ -77,8 +73,8 @@
   <header>
     <h1>FullCircle RPC demo</h1>
     <p class="muted">
-      SvelteKit + viem client talking to a local <code>@fullcircle/rpc</code> server that
-      replays mainnet history from <code>data/</code>.
+      SvelteKit + viem client talking to a local <code>@fullcircle/rpc</code> server that replays
+      mainnet history from <code>data/</code>.
     </p>
   </header>
 
