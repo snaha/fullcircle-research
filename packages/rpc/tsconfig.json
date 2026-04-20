@@ -9,8 +9,7 @@
     "declaration": true,
     "sourceMap": true,
     "lib": ["ES2022"],
-    "outDir": "./dist",
-    "rootDir": "./src"
+    "noEmit": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "test/**/*", "vitest.config.ts"]
 }

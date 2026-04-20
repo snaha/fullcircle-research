@@ -13,7 +13,8 @@
     "rpc:dev": "pnpm --filter @fullcircle/rpc run dev",
     "rpc:start": "pnpm --filter @fullcircle/rpc run start",
     "demo:dev": "pnpm --filter @fullcircle/demo run dev",
-    "demo:build": "pnpm --filter @fullcircle/demo run build"
+    "demo:build": "pnpm --filter @fullcircle/demo run build",
+    "test": "pnpm -r run test"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

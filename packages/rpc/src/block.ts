@@ -5,37 +5,26 @@
 // RLP list — pre-merge blocks stop at field 14 (nonce).
 
 import { RLP } from '@ethereumjs/rlp'
+import type { Address, BlockTag, Hash, Hex, RpcBlock as ViemRpcBlock } from 'viem'
 
 import type { BlockRecord } from './store.js'
 
-export interface RpcBlock {
-  number: string
-  hash: string
-  parentHash: string
-  sha3Uncles: string
-  miner: string
-  stateRoot: string
-  transactionsRoot: string
-  receiptsRoot: string
-  logsBloom: string
-  difficulty: string
-  gasLimit: string
-  gasUsed: string
-  timestamp: string
-  extraData: string
-  mixHash: string
-  nonce: string
-  size: string
-  totalDifficulty: string | null
-  transactions: string[]
-  uncles: string[]
-  baseFeePerGas?: string
-  withdrawalsRoot?: string
-  withdrawals?: unknown[]
-  blobGasUsed?: string
-  excessBlobGas?: string
-  parentBeaconBlockRoot?: string
-}
+// viem's `RpcBlock` for a mined block with transaction hashes only (no full tx
+// objects). We relax the post-fork fields to optional because pre-London /
+// pre-Shanghai / pre-Cancun blocks legitimately omit them on the wire, and our
+// archive spans pre-merge history. The hand-rolled shape this replaces tracked
+// viem field-for-field; now we just reference it directly.
+type MinedRpcBlock = ViemRpcBlock<Exclude<BlockTag, 'pending'>, false>
+type ForkGatedKeys =
+  | 'baseFeePerGas'
+  | 'blobGasUsed'
+  | 'excessBlobGas'
+  | 'sealFields'
+  | 'parentBeaconBlockRoot'
+  | 'withdrawalsRoot'
+  | 'withdrawals'
+export type RpcBlock = Omit<MinedRpcBlock, ForkGatedKeys> &
+  Partial<Pick<MinedRpcBlock, ForkGatedKeys>>
 
 export function blockToRpc(block: BlockRecord): RpcBlock {
   const fields = RLP.decode(block.rawHeader) as Uint8Array[]
@@ -68,7 +57,7 @@ export function blockToRpc(block: BlockRecord): RpcBlock {
 
   const out: RpcBlock = {
     number: toQuantity(number),
-    hash: block.hash,
+    hash: block.hash as Hash,
     parentHash: to32(parentHash),
     sha3Uncles: to32(sha3Uncles),
     miner: toAddress(miner),
@@ -86,7 +75,7 @@ export function blockToRpc(block: BlockRecord): RpcBlock {
     size: toQuantity(BigInt(block.rawHeader.length)),
     totalDifficulty:
       block.totalDifficulty !== null ? toQuantity(block.totalDifficulty) : null,
-    transactions: block.txHashes,
+    transactions: block.txHashes as Hash[],
     uncles: [],
   }
 
@@ -104,15 +93,15 @@ export function blockToRpc(block: BlockRecord): RpcBlock {
   return out
 }
 
-function toHex(b: Uint8Array): string {
+function toHex(b: Uint8Array): Hex {
   let s = '0x'
   for (const byte of b) s += byte.toString(16).padStart(2, '0')
-  return s
+  return s as Hex
 }
 
-function toQuantity(input: Uint8Array | bigint): string {
+function toQuantity(input: Uint8Array | bigint): Hex {
   const n = typeof input === 'bigint' ? input : bytesToBigInt(input)
-  return '0x' + n.toString(16)
+  return `0x${n.toString(16)}` as Hex
 }
 
 function bytesToBigInt(b: Uint8Array): bigint {
@@ -121,22 +110,22 @@ function bytesToBigInt(b: Uint8Array): bigint {
   return n
 }
 
-function to32(b: Uint8Array): string {
-  return toFixedHex(b, 32)
+function to32(b: Uint8Array): Hash {
+  return toFixedHex(b, 32) as Hash
 }
 
-function toAddress(b: Uint8Array): string {
-  return toFixedHex(b, 20)
+function toAddress(b: Uint8Array): Address {
+  return toFixedHex(b, 20) as Address
 }
 
 // RLP strips leading zeros; JSON-RPC hashes/addresses/bloom must be left-padded
 // to their canonical width.
-function toFixedHex(b: Uint8Array, width: number): string {
+function toFixedHex(b: Uint8Array, width: number): Hex {
   if (b.length > width) {
     throw new Error(`toFixedHex: ${b.length} bytes exceeds width ${width}`)
   }
   let s = '0x'
   for (let i = 0; i < width - b.length; i++) s += '00'
   for (const byte of b) s += byte.toString(16).padStart(2, '0')
-  return s
+  return s as Hex
 }
