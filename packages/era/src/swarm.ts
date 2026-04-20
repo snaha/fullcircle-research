@@ -36,6 +36,7 @@ export interface UploadOptions {
   batchId: string // required postage batch ID
   onProgress?: (msg: string) => void
   concurrency?: number // max concurrent uploads (default: 32)
+  manifestHash?: string // existing manifest to extend
 }
 
 // ---------- Public functions ----------
@@ -88,7 +89,18 @@ export async function uploadBlocksAndBuildManifest(
   const log = options.onProgress ?? console.log
 
   const manifest = new MantarayNode()
-  manifest.setObfuscationKey = Utils.gen32Bytes()
+
+  if (options.manifestHash) {
+    log(`loading existing manifest ${options.manifestHash}...`)
+    const storageLoader = async (ref: Reference) => {
+      const data = await bee.downloadData(bytesToHex(ref))
+      return new Uint8Array(data)
+    }
+    const existingRef = hexToBytes(options.manifestHash) as Reference
+    await manifest.load(storageLoader, existingRef)
+  } else {
+    manifest.setObfuscationKey = Utils.gen32Bytes()
+  }
 
   let blocksUploaded = 0
   let txHashesIndexed = 0

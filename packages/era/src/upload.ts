@@ -1,8 +1,9 @@
 // CLI entry point for uploading block data to Swarm.
 //
 // Usage:
-//   pnpm era:upload --batch-id <postage-batch-id> [range]
+//   pnpm era:upload --batch-id <postage-batch-id> [--manifest <hash>] [range]
 //   pnpm era:upload --batch-id abc123... 0..6
+//   pnpm era:upload --batch-id abc123... --manifest def456... 1
 //   pnpm era:upload --bee-url http://bee.example.com --batch-id abc123... 5
 
 import { existsSync } from 'node:fs'
@@ -16,9 +17,10 @@ import { uploadBlocksAndBuildManifest } from './swarm.js'
 function parseArgs(argv: string[]): {
   beeUrl?: string
   batchId?: string
+  manifestHash?: string
   target?: string
 } {
-  const result: { beeUrl?: string; batchId?: string; target?: string } = {}
+  const result: { beeUrl?: string; batchId?: string; manifestHash?: string; target?: string } = {}
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
@@ -26,6 +28,8 @@ function parseArgs(argv: string[]): {
       result.beeUrl = argv[++i]
     } else if (arg === '--batch-id' && argv[i + 1]) {
       result.batchId = argv[++i]
+    } else if (arg === '--manifest' && argv[i + 1]) {
+      result.manifestHash = argv[++i]
     } else if (!arg.startsWith('--')) {
       result.target = arg
     }
@@ -40,11 +44,11 @@ if (!args.batchId) {
   console.error('error: --batch-id is required')
   console.error('')
   console.error('Usage:')
-  console.error('  pnpm era:upload --batch-id <postage-batch-id> [range]')
+  console.error('  pnpm era:upload --batch-id <postage-batch-id> [--manifest <hash>] [range]')
   console.error('')
   console.error('Examples:')
   console.error('  pnpm era:upload --batch-id abc123... 0')
-  console.error('  pnpm era:upload --batch-id abc123... 0..6')
+  console.error('  pnpm era:upload --batch-id abc123... --manifest def456... 1')
   console.error('  pnpm era:upload --bee-url http://bee.example.com --batch-id abc123... 5')
   process.exit(1)
 }
@@ -67,6 +71,7 @@ for (const t of targets) {
   const result = await uploadBlocksAndBuildManifest(t.blocksPath, {
     beeUrl: args.beeUrl,
     batchId: args.batchId,
+    manifestHash: args.manifestHash,
     onProgress: (msg) => console.log(`       ${msg}`),
   })
 
