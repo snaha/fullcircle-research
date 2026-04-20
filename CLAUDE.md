@@ -34,6 +34,7 @@ Package manager: **pnpm** (not npm). Root scripts:
 - `pnpm era:download [range|url]` -- download only
 - `pnpm era:process [range|url]` -- parse cached files only
 - `pnpm era:download-and-process [range|url]` -- both
+- `pnpm bee:start` -- boot local Swarm cluster (queen + 1 worker) via `@fairdatasociety/fdp-play`; queen API on `:1633`, worker on `:11633`. Also `bee:start:detach`, `bee:stop`, `bee:logs`, `bee:fresh`.
 
 ## Key Research Areas
 
