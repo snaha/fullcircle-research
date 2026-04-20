@@ -56,6 +56,40 @@
     if (t === 3) return 'blob'
     return `0x${t.toString(16)}`
   }
+
+  // Per-tx gas used from receipts; undefined when context is missing.
+  let gasUsed = $derived.by(() => {
+    if (!block || txIndex < 0) return undefined
+    const cum = block.receipts[txIndex]?.cumulativeGasUsed
+    if (cum === undefined) return undefined
+    const prev = txIndex > 0 ? (block.receipts[txIndex - 1]?.cumulativeGasUsed ?? 0n) : 0n
+    return cum - prev
+  })
+
+  // EIP-1559 effective gas price: baseFee + min(maxPriorityFee, maxFee - baseFee).
+  let effectiveGasPrice = $derived.by(() => {
+    if (!tx || !block) return undefined
+    if (tx.gasPrice !== undefined) return tx.gasPrice
+    if (tx.maxFeePerGas !== undefined && tx.maxPriorityFeePerGas !== undefined) {
+      const baseFee = block.header.baseFeePerGas ?? 0n
+      const room = tx.maxFeePerGas > baseFee ? tx.maxFeePerGas - baseFee : 0n
+      const priority = tx.maxPriorityFeePerGas < room ? tx.maxPriorityFeePerGas : room
+      return baseFee + priority
+    }
+    return undefined
+  })
+
+  let txFee = $derived.by(() =>
+    gasUsed !== undefined && effectiveGasPrice !== undefined
+      ? gasUsed * effectiveGasPrice
+      : undefined,
+  )
+
+  let burntFee = $derived.by(() => {
+    if (gasUsed === undefined || !block) return undefined
+    const baseFee = block.header.baseFeePerGas
+    return baseFee === undefined ? undefined : gasUsed * baseFee
+  })
 </script>
 
 <main class="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8">
@@ -110,6 +144,15 @@
           <dt class="text-muted-foreground">Nonce</dt>
           <dd class="font-mono">{tx.nonce}</dd>
 
+          <dt class="text-muted-foreground">From</dt>
+          <dd class="break-all font-mono">
+            {#if tx.from === null}
+              <span class="text-muted-foreground">(recovery failed)</span>
+            {:else}
+              {tx.from}
+            {/if}
+          </dd>
+
           <dt class="text-muted-foreground">To</dt>
           <dd class="break-all font-mono">
             {#if tx.to === null}
@@ -122,8 +165,19 @@
           <dt class="text-muted-foreground">Value</dt>
           <dd class="font-mono">{formatEth(tx.value)}</dd>
 
-          <dt class="text-muted-foreground">Gas limit</dt>
-          <dd class="font-mono">{tx.gasLimit.toLocaleString()}</dd>
+          <dt class="text-muted-foreground">Gas used / limit</dt>
+          <dd class="font-mono">
+            {#if gasUsed !== undefined}
+              {gasUsed.toLocaleString()} / {tx.gasLimit.toLocaleString()}
+              {#if tx.gasLimit > 0n}
+                <span class="text-muted-foreground"
+                  >({Number((gasUsed * 10000n) / tx.gasLimit) / 100}%)</span
+                >
+              {/if}
+            {:else}
+              {tx.gasLimit.toLocaleString()}
+            {/if}
+          </dd>
 
           {#if tx.gasPrice !== undefined}
             <dt class="text-muted-foreground">Gas price</dt>
@@ -138,6 +192,23 @@
           {#if tx.maxPriorityFeePerGas !== undefined}
             <dt class="text-muted-foreground">Max priority fee / gas</dt>
             <dd class="font-mono">{formatGwei(tx.maxPriorityFeePerGas)}</dd>
+          {/if}
+
+          {#if effectiveGasPrice !== undefined && tx.gasPrice === undefined}
+            <dt class="text-muted-foreground">Effective gas price</dt>
+            <dd class="font-mono">{formatGwei(effectiveGasPrice)}</dd>
+          {/if}
+
+          {#if txFee !== undefined}
+            <dt class="text-muted-foreground">Transaction fee</dt>
+            <dd class="font-mono">
+              {formatEth(txFee)}
+              {#if burntFee !== undefined && burntFee > 0n}
+                <span class="text-muted-foreground"
+                  >({formatEth(burntFee)} burnt · {formatEth(txFee - burntFee)} to miner)</span
+                >
+              {/if}
+            </dd>
           {/if}
 
           {#if tx.chainId !== undefined}

@@ -25,6 +25,7 @@
   "dependencies": {
     "@ethereumjs/rlp": "^5.0.2",
     "@ethersphere/bee-js": "^8.0.0",
+    "@noble/curves": "^1.9.1",
     "@noble/hashes": "^1.4.0",
     "mantaray-js": "^1.0.3",
     "snappyjs": "^0.7.0"
