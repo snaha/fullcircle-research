@@ -1,42 +1,50 @@
+# Technical Challenges: solution notes
 
+The canonical description of the technical challenges lives in [RESEARCH.md](./RESEARCH.md) section 8.
+This file keeps only the incremental solution/implementation notes so the challenge statements do not drift out of sync.
 
-8.1 Data Scale
+## 8.1 Data Scale
 
-At 4KB per chunk, 1 TB = ~250 million chunks. Full Ethereum history (~1 TB) would require significant Swarm network capacity and postage stamp funding.
+See [RESEARCH.md §8.1](./RESEARCH.md#81-data-scale) for the problem statement.
 
-8.1B If we do not only want historical data but also live data, the challenge is also latency.
+Additional note: if we want not only historical data but also live access, latency is part of the challenge.
 
 Solution:
 
 - assume header chain
-- having a balanced staked subnetwork serving as Swarm Bridge service (nodes simulateously running Eth node with at least an Swarm API client) save (see 8.2 on how) data pinned locally to their extended cold store
-- use DSN registry contract as source for block-> overlay map, optoional network location retrieval can used to pull these out to hot storage. (mechanism described in SWIP on global pinning)
+- have a balanced staked subnetwork serving as a Swarm Bridge service (nodes simultaneously running an Eth node with at least a Swarm API client) save data pinned locally to their extended cold store (see 8.2 on how)
+- use a DSN registry contract as the source for block -> overlay mapping; optional network location retrieval can be used to pull these out to hot storage (mechanism described in the SWIP on global pinning)
 - solves cheap/free storage
-- popular nodes to hot storage only
-- no real time network I/O just client-local save initially
+- popular nodes go to hot storage only
+- no real-time network I/O, just client-local save initially
 - closest node to ID read from SBS DSN contract
-8.2 Hash Function Mismatch
 
-Swarm uses BMT hashes; Ethereum state uses Keccak256. Storing era1 files as opaque blobs avoids this issue. But for state-on-Swarm approaches (trie nodes as chunks), this requires protocol-level changes to Bee or a mapping layer.
+## 8.2 Hash Function Mismatch
 
-    using SOC  with ID=keccak, OWner=Closest_SBS(ID) wrapping the trie node (CAC ~~ EPAC)
+See [RESEARCH.md §8.2](./RESEARCH.md#82-hash-function-mismatch) for the problem statement.
 
-    - basically O(1) index
-    - mapping validated (only protocol change) whenever retrieved
-    - preserves pointer-based linking
-    - provable values all the way inclusion proofs
-    - in fact all historical and current data CCIP-able
+Proposed approach:
 
+- use SOC with `ID = keccak` and `Owner = Closest_SBS(ID)` wrapping the trie node (`CAC ~~ EPAC`)
+- basically O(1) index
+- mapping validated (only protocol change) whenever retrieved
+- preserves pointer-based linking
+- provable values all the way through inclusion proofs
+- in fact all historical and current data becomes CCIP-able
 
-8.3 Retrieval Latency
+## 8.3 Retrieval Latency
 
-Swarm chunk retrieval adds network latency vs local disk. For block sync (which requires rapid sequential state access), aggressive caching would be needed. For historical data distribution (era1 files), bulk transfer latency is acceptable.
+See [RESEARCH.md §8.3](./RESEARCH.md#83-retrieval-latency) for the problem statement.
 
-    only synced and stamped when repushed to hot storage after retrieval
+Additional note:
 
-8.4 Indexing
+- only sync and stamp when repushed to hot storage after retrieval
 
-Ethereum data is naturally indexed by block number, tx hash, address, and log topics. Swarm's content addressing doesn't natively support these query patterns. Solutions:
+## 8.4 Indexing
+
+See [RESEARCH.md §8.4](./RESEARCH.md#84-indexing) for the problem statement.
+
+Proposed solution structures:
 
 - Feeds for block-number -> reference mapping
 - Manifests for structured access
@@ -44,14 +52,18 @@ Ethereum data is naturally indexed by block number, tx hash, address, and log to
 
 [POT](https://github.com/ethersphere/proximity-order-trie) to the rescue.
 
-8.5 Persistence Economics
+## 8.5 Persistence Economics
 
-Keeping 1+ TB alive indefinitely requires ongoing postage stamp purchases. No natural economic incentive for Swarm nodes to store blockchain data unless specifically funded. This is an operational cost that needs a sustainability model.
+See [RESEARCH.md §8.5](./RESEARCH.md#85-persistence-economics) for the problem statement.
 
-    see cold store  + opportunistic caching of popular nodes + repush hot with stamps
+Additional note:
 
-8.6 Verification
+- see cold store + opportunistic caching of popular nodes + repush hot with stamps
 
-Era1 files are self-verifying via accumulator roots. Individual chunks can be BMT-verified. But verifying that data represents valid Ethereum blocks requires the header chain context. A full trustless solution needs Merkle proofs against known block headers.
+## 8.6 Verification
 
-    block headers are supposed to be known
+See [RESEARCH.md §8.6](./RESEARCH.md#86-verification) for the problem statement.
+
+Additional note:
+
+- block headers are supposed to be known
