@@ -12,12 +12,15 @@
     "download": "tsx src/download.ts",
     "process": "tsx src/process.ts",
     "download-and-process": "tsx src/download-and-process.ts",
+    "upload": "tsx src/upload.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc"
   },
   "dependencies": {
     "@ethereumjs/rlp": "^5.0.2",
+    "@ethersphere/bee-js": "^8.0.0",
     "@noble/hashes": "^1.4.0",
+    "mantaray-js": "^1.0.3",
     "snappyjs": "^0.7.0"
   },
   "devDependencies": {

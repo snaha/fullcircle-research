@@ -9,6 +9,7 @@
     "era:download": "pnpm --filter @fullcircle/era run download",
     "era:process": "pnpm --filter @fullcircle/era run process",
     "era:download-and-process": "pnpm --filter @fullcircle/era run download-and-process",
+    "era:upload": "pnpm --filter @fullcircle/era run upload",
     "rpc:dev": "pnpm --filter @fullcircle/rpc run dev",
     "rpc:start": "pnpm --filter @fullcircle/rpc run start",
     "demo:dev": "pnpm --filter @fullcircle/demo run dev",
