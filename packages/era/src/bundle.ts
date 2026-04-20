@@ -164,6 +164,101 @@ export function decodeBlockBody(rawBody: Uint8Array): DecodedBody {
   }
 }
 
+// ---------- Receipts (slim form: [status, cumulativeGasUsed, logs]) ----------
+
+export interface DecodedReceipt {
+  type: number
+  status?: bigint // 1 = success, 0 = failure; undefined for pre-Byzantium (postState root)
+  cumulativeGasUsed: bigint
+}
+
+// erae slim receipt format: [txType, postStateOrStatus, cumulativeGasUsed, logs]
+// - txType: empty bytes for legacy, single byte for EIP-2718 typed
+// - postStateOrStatus: 32-byte state root pre-Byzantium, 1-byte status (0/1) post-Byzantium
+// - logsBloom is omitted (recoverable from logs)
+export function decodeBlockReceipts(rawReceipts: Uint8Array): DecodedReceipt[] {
+  if (rawReceipts.length === 0) return []
+  const items = RLP.decode(rawReceipts) as unknown
+  if (!Array.isArray(items)) {
+    throw new Error('decodeBlockReceipts: not a list')
+  }
+  return items.map((r) => {
+    const fields = r as Uint8Array[]
+    const typeBytes = fields[0]
+    const type = typeBytes.length === 0 ? 0 : typeBytes[0]
+    const postStateOrStatus = fields[1]
+    // status only applies post-Byzantium (1 byte); pre-Byzantium stores a 32-byte postState.
+    const status = postStateOrStatus.length <= 1 ? bytesToBigInt(postStateOrStatus) : undefined
+    return {
+      type,
+      status,
+      cumulativeGasUsed: bytesToBigInt(fields[2]),
+    }
+  })
+}
+
+// ---------- Block reward ----------
+
+const WEI_PER_ETH = 10n ** 18n
+
+// Ethereum mainnet fork blocks that change the static block reward.
+const BYZANTIUM_BLOCK = 4370000n // 5 -> 3 ETH
+const CONSTANTINOPLE_BLOCK = 7280000n // 3 -> 2 ETH
+const PARIS_BLOCK = 15537394n // 2 -> 0 ETH (merge, no more PoW issuance)
+
+export interface BlockReward {
+  staticReward: bigint // era-based block subsidy
+  uncleBonus: bigint // staticReward/32 per included uncle
+  fees: bigint // sum of priority fees paid to the miner
+  total: bigint
+}
+
+function staticRewardForBlock(number: bigint): bigint {
+  if (number >= PARIS_BLOCK) return 0n
+  if (number >= CONSTANTINOPLE_BLOCK) return 2n * WEI_PER_ETH
+  if (number >= BYZANTIUM_BLOCK) return 3n * WEI_PER_ETH
+  return 5n * WEI_PER_ETH
+}
+
+export function computeBlockReward(
+  header: DecodedHeader,
+  body: DecodedBody,
+  receipts: DecodedReceipt[],
+): BlockReward {
+  const staticReward = staticRewardForBlock(header.number)
+  const uncleBonus = (staticReward * BigInt(body.uncles.length)) / 32n
+  const baseFee = header.baseFeePerGas ?? 0n
+
+  let fees = 0n
+  let prevCumGas = 0n
+  for (let i = 0; i < body.transactions.length; i++) {
+    const tx = body.transactions[i]
+    const cumGas = receipts[i]?.cumulativeGasUsed ?? 0n
+    const gasUsed = cumGas - prevCumGas
+    prevCumGas = cumGas
+
+    let effectiveGasPrice: bigint
+    if (tx.gasPrice !== undefined) {
+      effectiveGasPrice = tx.gasPrice
+    } else if (tx.maxFeePerGas !== undefined && tx.maxPriorityFeePerGas !== undefined) {
+      const room = tx.maxFeePerGas > baseFee ? tx.maxFeePerGas - baseFee : 0n
+      const priorityFee = tx.maxPriorityFeePerGas < room ? tx.maxPriorityFeePerGas : room
+      effectiveGasPrice = baseFee + priorityFee
+    } else {
+      continue
+    }
+
+    fees += gasUsed * (effectiveGasPrice - baseFee)
+  }
+
+  return {
+    staticReward,
+    uncleBonus,
+    fees,
+    total: staticReward + uncleBonus + fees,
+  }
+}
+
 export function decodeTransaction(bytes: Uint8Array): DecodedTransaction {
   const hash = '0x' + toHexRaw(keccak_256(bytes))
   const raw = '0x' + toHexRaw(bytes)

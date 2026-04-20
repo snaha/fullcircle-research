@@ -115,6 +115,18 @@
             {/if}
           </dd>
 
+          <dt class="text-muted-foreground">Block reward</dt>
+          <dd class="font-mono">
+            {formatEth(block.reward.total)}
+            <span class="text-muted-foreground">
+              ({formatEth(block.reward.staticReward)} subsidy
+              {#if block.reward.uncleBonus > 0n}
+                + {formatEth(block.reward.uncleBonus)} uncles
+              {/if}
+              + {formatEth(block.reward.fees)} fees)
+            </span>
+          </dd>
+
           {#if h.baseFeePerGas !== undefined}
             <dt class="text-muted-foreground">Base fee</dt>
             <dd class="font-mono">{formatGwei(h.baseFeePerGas)}</dd>

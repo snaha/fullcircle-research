@@ -2,17 +2,23 @@
 // Mantaray manifest uploaded by @fullcircle/era.
 
 import {
+  computeBlockReward,
   decodeBlockBody,
   decodeBlockBundle,
   decodeBlockHeader,
+  decodeBlockReceipts,
   hashBlockHeader,
+  type BlockReward,
   type DecodedBody,
   type DecodedHeader,
+  type DecodedReceipt,
 } from '@fullcircle/era/bundle'
 
 export interface FetchedBlock {
   header: DecodedHeader
   body: DecodedBody
+  receipts: DecodedReceipt[]
+  reward: BlockReward
   totalDifficulty: bigint | null
   hash: string // keccak256(rawHeader) — canonical block hash
 }
@@ -50,9 +56,14 @@ export async function fetchBlock(
 
   const bytes = await fetchBundleByPath(`${index}/${normalizedKey}`, opts)
   const bundle = decodeBlockBundle(bytes)
+  const header = decodeBlockHeader(bundle.rawHeader)
+  const body = decodeBlockBody(bundle.rawBody)
+  const receipts = decodeBlockReceipts(bundle.rawReceipts)
   return {
-    header: decodeBlockHeader(bundle.rawHeader),
-    body: decodeBlockBody(bundle.rawBody),
+    header,
+    body,
+    receipts,
+    reward: computeBlockReward(header, body, receipts),
     totalDifficulty: bundle.totalDifficulty,
     hash: hashBlockHeader(bundle.rawHeader),
   }
