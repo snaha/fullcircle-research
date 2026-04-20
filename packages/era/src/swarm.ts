@@ -35,6 +35,7 @@ export interface UploadOptions {
   beeUrl?: string // default: http://localhost:1633
   batchId: string // required postage batch ID
   onProgress?: (msg: string) => void
+  concurrency?: number // max concurrent uploads (default: 32)
 }
 
 // ---------- Public functions ----------
@@ -131,13 +132,28 @@ export async function uploadBlocksAndBuildManifest(
     }
   }
 
-  log(`uploading manifest with ${blocksUploaded} blocks...`)
+  // Pre-calculate total chunks by counting all nodes in the Mantaray tree
+  const totalChunks = countMantarayNodes(manifest)
+  log(`uploading manifest (${totalChunks} chunks)...`)
 
-  // Save manifest to Swarm
-  const manifestRef = await manifest.save(async (data: Uint8Array) => {
-    const result = await bee.uploadData(options.batchId, data)
-    return hexToBytes(result.reference) as Reference
-  })
+  // Save manifest to Swarm with concurrency-limited uploads
+  const concurrency = options.concurrency ?? 32
+
+  const queuedUpload = createUploadQueue(
+    concurrency,
+    totalChunks,
+    async (data: Uint8Array) => {
+      const result = await bee.uploadData(options.batchId, data)
+      return hexToBytes(result.reference) as Reference
+    },
+    (uploaded, total) => {
+      if (uploaded % 100 === 0 || uploaded === total) {
+        log(`manifest chunks: ${uploaded}/${total}`)
+      }
+    },
+  )
+
+  const manifestRef = await manifest.save(queuedUpload)
 
   const manifestReference = bytesToHex(manifestRef)
 
@@ -153,6 +169,58 @@ export async function uploadBlocksAndBuildManifest(
 // ---------- Internal helpers ----------
 
 const textEncoder = new TextEncoder()
+
+type MantarayNode = InstanceType<typeof MantarayJs.MantarayNode>
+
+/**
+ * Count all nodes in a MantarayNode tree.
+ * Each node = 1 chunk when uploaded to Swarm.
+ */
+function countMantarayNodes(node: MantarayNode): number {
+  let count = 1 // This node
+  if (!node.forks) return count
+  for (const fork of Object.values(node.forks)) {
+    count += countMantarayNodes(fork.node)
+  }
+  return count
+}
+
+/**
+ * Create a concurrent upload queue with a sliding window.
+ *
+ * This prevents overwhelming the Bee node with too many parallel requests
+ * while still maximizing throughput within the concurrency limit.
+ */
+function createUploadQueue(
+  maxConcurrent: number,
+  totalChunks: number,
+  uploadFn: (data: Uint8Array) => Promise<Reference>,
+  onProgress: (uploaded: number, total: number) => void,
+): (data: Uint8Array) => Promise<Reference> {
+  let inFlight = 0
+  let uploaded = 0
+  const waiting: Array<{ resolve: () => void }> = []
+
+  return async (data: Uint8Array): Promise<Reference> => {
+    // Wait for a slot if at capacity
+    while (inFlight >= maxConcurrent) {
+      await new Promise<void>(resolve => waiting.push({ resolve }))
+    }
+
+    inFlight++
+    try {
+      const ref = await uploadFn(data)
+      uploaded++
+      onProgress(uploaded, totalChunks)
+      return ref
+    } finally {
+      inFlight--
+      // Release next waiting upload
+      const next = waiting.shift()
+      if (next) next.resolve()
+    }
+  }
+}
 
 /**
  * Convert Uint8Array to hex string (no 0x prefix).
