@@ -54,46 +54,160 @@ Importable as `@fullcircle/era` from sibling workspace packages.
 ```bash
 pnpm install
 
-# three root scripts — each takes the same arg (range, era number, or URL)
-pnpm era:download                   # fetch eras 0..6 into data/
+# three root scripts — each takes the same arg
+pnpm era:download                   # fetch default range (0..6) into data/
 pnpm era:process 0..6               # parse cached files → .summary.json / .blocks.ndjson / .index.ndjson
 pnpm era:download-and-process 7     # both, one pass
+```
 
-pnpm era:download 42                # single era
-pnpm era:download 0..99             # range
-pnpm era:download https://data.ethpandaops.io/erae/mainnet/mainnet-00000-a6860fef.erae
+### Argument forms
+
+Every script accepts the same single argument:
+
+| form | meaning |
+|---|---|
+| *(omitted)* | eras 0..6 (default) |
+| `42` | single era 42 |
+| `0..99` | inclusive range of eras |
+| `https://…/mainnet-NNNNN-….erae` | explicit file URL (bypasses the checksums lookup) |
+
+Ranges process eras strictly in order, sequentially — no parallelism yet. That
+means a range of 100 eras will download ~100 files one after another (each
+~4 MiB; network is the dominant cost).
+
+```bash
+pnpm era:download 0..99                                                # 100 eras, sequential
+pnpm era:process 0..99                                                 # reparse all cached
+pnpm era:download-and-process 0..99                                    # fetch + process each
+
+pnpm era:download-and-process \
+  https://data.ethpandaops.io/erae/mainnet/mainnet-00000-a6860fef.erae # one file by URL
 ```
 
 Era numbers are resolved via the public
 [`checksums_sha256.txt`](https://data.ethpandaops.io/erae/mainnet/checksums_sha256.txt)
 (cached in `data/` after first fetch). Downloaded `.erae` files are cached on
-disk — rerunning reparses locally without re-downloading. Override the output
-directory with `FULLCIRCLE_DATA_DIR=…`.
+disk — rerunning `era:process` against an already-downloaded range reparses
+locally without re-downloading. Override the output directory with
+`FULLCIRCLE_DATA_DIR=…`.
 
 ### Outputs
 
-Everything lands in [`data/`](./data/) (gitignored). Per era:
+Everything lands in [`data/`](./data/) (gitignored). Filenames follow the
+upstream convention `mainnet-NNNNN-<short-hash>.<ext>`, where `NNNNN` is the
+zero-padded era number and `<short-hash>` is the first 4 bytes of the era's
+last-block hash (self-checking against the file's contents).
+
+Per era you get four files:
 
 | file | contents |
 |---|---|
-| `mainnet-NNNNN-<hash>.erae` | raw download |
-| `…summary.json` | version, block range, accumulator root, first/last block, tx total |
-| `…blocks.ndjson` | one JSON line per block: `number`, `hash`, `totalDifficulty`, `txHashes`, `rawHeader`, `rawBody`, `rawReceipts`, `proof` (bytes as `0x…` hex) |
-| `…index.ndjson` | interleaved block + tx records (see below) |
+| `mainnet-NNNNN-<hash>.erae` | raw download from ethPandaOps |
+| `mainnet-NNNNN-<hash>.summary.json` | one-object overview (see below) |
+| `mainnet-NNNNN-<hash>.blocks.ndjson` | one JSON record per block (see below) |
+| `mainnet-NNNNN-<hash>.index.ndjson` | interleaved `block` + `tx` lookup records (see below) |
 
-The `…index.ndjson` has two record kinds, emitted in block order. A block
-record is followed immediately by its transaction records:
+All numeric fields that can exceed `Number.MAX_SAFE_INTEGER` (block numbers,
+total difficulty) are serialised as **decimal strings** so they round-trip
+through any JSON parser. All byte fields are lowercase `0x`-prefixed hex.
 
-```jsonc
-{"kind":"block","number":"57344","hash":"0x523f…"}
-{"kind":"block","number":"57345","hash":"0xa20c…"}
-{"kind":"block","number":"57346","hash":"0xa395…"}
-{"kind":"tx","hash":"0x5484…","blockNumber":"57346","txIndex":0}
-{"kind":"tx","hash":"0x704b…","blockNumber":"57346","txIndex":1}
+#### `…summary.json`
+
+A single JSON object, pretty-printed. Useful as a cheap "what's in this
+file?" probe without touching the big NDJSONs.
+
+```json
+{
+  "sourceUrl":        "https://data.ethpandaops.io/erae/mainnet/mainnet-00007-fbd10bce.erae",
+  "version":          "0x3265",
+  "startingBlock":    "57344",
+  "blockCount":       8192,
+  "accumulatorRoot":  "0xd9bc682b…",
+  "firstBlock":       { "number": "57344", "hash": "0x523f5beb…", "txCount": 0 },
+  "lastBlock":        { "number": "65535", "hash": "0xfbd10bce…", "txCount": 0 },
+  "totalTxs":         2676
+}
 ```
 
-A consumer scans the file once to build `byNumber`, `byBlockHash`, and
-`byTxHash` maps. The shape is append-friendly on purpose — when an RPC tail
+| field | type | notes |
+|---|---|---|
+| `sourceUrl` | string | upstream URL the `.erae` was fetched from |
+| `version` | hex string | erae format magic (`0x3265`) |
+| `startingBlock` | decimal string | first block number, from the `BlockIndex` trailer |
+| `blockCount` | number | always `8192` for complete eras |
+| `accumulatorRoot` | `0x…` hex or `null` | HTR of HeaderRecords — pre-merge only, `null` post-merge |
+| `firstBlock`, `lastBlock` | object | `{ number, hash, txCount }` for the bookends |
+| `totalTxs` | number | sum of `txCount` across all 8192 blocks |
+
+#### `…blocks.ndjson`
+
+Newline-delimited JSON, 8192 lines per full era, one line per block in
+block-number order. Each line is a standalone JSON object:
+
+```jsonc
+{
+  "number":          "60343",                                 // decimal string
+  "hash":            "0x60b9fec9…",                           // keccak256(rawHeader)
+  "totalDifficulty": "65229745891189391",                     // decimal string or null (post-merge)
+  "txHashes":        ["0xbc77efd4…"],                         // keccak256 per tx, block order
+  "rawHeader":       "0xf90219a02…",                          // RLP-encoded header bytes
+  "rawBody":         "0xf87cf879…",                           // RLP-encoded [txs, uncles, withdrawals?]
+  "rawReceipts":     "0xe7e680a0…",                           // RLP-encoded slim receipts (erae variant)
+  "proof":           null                                      // optional Portal Network proof
+}
+```
+
+| field | type | notes |
+|---|---|---|
+| `number` | decimal string | block number |
+| `hash` | `0x…` hex (32 bytes) | canonical block hash, equal to `keccak256(rawHeader)` |
+| `totalDifficulty` | decimal string or `null` | cumulative PoW difficulty; `null` post-merge |
+| `txHashes` | `string[]` | per-tx `keccak256` hashes in block order; `[]` for empty blocks |
+| `rawHeader` | `0x…` hex | RLP-encoded header — the bytes that hash to `hash` |
+| `rawBody` | `0x…` hex | RLP-encoded `[transactions, uncles, withdrawals?]` |
+| `rawReceipts` | `0x…` hex | RLP-encoded *slim* receipts (no bloom filters — erae variant) |
+| `proof` | `0x…` hex or `null` | optional Portal Network historical-proof blob |
+
+The `raw*` fields are the exact decompressed record payloads from the erae
+file, ready to feed into any RLP decoder (ethers, viem, ethereumjs) when
+fully-typed blocks are needed. Keeping them raw avoids decoding 8192 full
+blocks at parse time. Empty pre-tx blocks store minimal 3-byte bodies
+(`0xc2c0c0` = RLP of `[[],[]]`) and 1-byte receipts (`0xc0` = RLP of `[]`).
+
+#### `…index.ndjson`
+
+Newline-delimited JSON with **two record kinds**, emitted in block-number
+order. A block record is followed immediately by its transaction records:
+
+```jsonc
+{"kind":"block","number":"57344","hash":"0x523f5beb…"}
+{"kind":"block","number":"57345","hash":"0xa20c9161…"}
+{"kind":"block","number":"57346","hash":"0xa39508eb…"}
+{"kind":"tx","hash":"0x54841944…","blockNumber":"57346","txIndex":0}
+{"kind":"tx","hash":"0x704b14c2…","blockNumber":"57346","txIndex":1}
+```
+
+Block record:
+
+| field | type | notes |
+|---|---|---|
+| `kind` | `"block"` | record-type discriminator |
+| `number` | decimal string | block number |
+| `hash` | `0x…` hex | block hash |
+
+Transaction record:
+
+| field | type | notes |
+|---|---|---|
+| `kind` | `"tx"` | record-type discriminator |
+| `hash` | `0x…` hex | transaction hash |
+| `blockNumber` | decimal string | block this tx is in |
+| `txIndex` | number | 0-based position within the block |
+
+Total record count per full era: `8192 + totalTxs`. A consumer scans the
+file once to build `byNumber` / `byBlockHash` / `byTxHash` lookup maps
+(`byBlockHash` is trivially the inverse of `byNumber` — that's why it
+isn't stored). The shape is append-friendly on purpose — when an RPC tail
 (or any later-arriving data) needs to be stitched on, it's a single
 `fs.appendFile` per new block + tx, with no file rewrite.
 
