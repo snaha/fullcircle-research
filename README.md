@@ -259,6 +259,23 @@ Endpoints: queen API at `http://localhost:1633`, local blockchain RPC at
 - `pnpm era:process [range|url]` — parse cached files only
 - `pnpm era:download-and-process [range|url]` — both
 - `pnpm bee:start` / `bee:stop` / `bee:logs` / `bee:fresh` — local Bee node
+- `pnpm lint` / `pnpm format` / `pnpm knip` / `pnpm check:all` — run tooling
+  across every package that defines the matching script
+
+## Linting & formatting
+
+Each package under `packages/` has its own `.prettierrc` (where needed),
+`eslint.config.mjs`, and `knip.ts`, and exposes a uniform script surface:
+
+- `pnpm lint` — `prettier --check` + `eslint`
+- `pnpm format` — `prettier --write` + `eslint --fix`
+- `pnpm knip` — dead-code / unused-dep scan
+- `pnpm check` — type-check (package-specific: `tsc --noEmit` or `svelte-check`)
+- `pnpm check:all` — `lint` + `check` + `knip`
+
+Run `pnpm check:all` at the repo root to run all of the above across every
+package in one go. Root `.prettierrc` / `.prettierignore` serve as baseline
+fallbacks for any package that doesn't override them locally.
 
 ## Dependencies
 
