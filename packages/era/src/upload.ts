@@ -11,7 +11,13 @@ import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
 import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
-import { addBlocksToManifest, openManifest, saveManifest, writeBlockRangeMeta } from './swarm.js'
+import {
+  addBlocksToManifest,
+  getManifestBlockRange,
+  openManifest,
+  saveManifest,
+  writeBlockRangeMeta,
+} from './swarm.js'
 
 // ---------- Parse arguments ----------
 
@@ -83,6 +89,13 @@ const manifest = await openManifest(bee, {
   onProgress: (msg) => console.log(msg),
 })
 
+const rangeBefore = getManifestBlockRange(manifest)
+if (rangeBefore) {
+  console.log(`before: firstBlock=${rangeBefore.firstBlock} lastBlock=${rangeBefore.lastBlock}`)
+} else {
+  console.log('before: empty manifest')
+}
+
 const totals = { blocksUploaded: 0, txHashesIndexed: 0 }
 const runStarted = Date.now()
 
@@ -111,6 +124,12 @@ const manifestReference = await saveManifest(bee, manifest, {
   batchId,
   onProgress: (msg) => console.log(`       ${msg}`),
 })
+
+if (meta) {
+  console.log(`after:  firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}`)
+} else {
+  console.log('after:  empty manifest')
+}
 
 const elapsed = Date.now() - runStarted
 

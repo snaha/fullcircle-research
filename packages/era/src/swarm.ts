@@ -172,6 +172,22 @@ export async function addBlocksToManifest(
 }
 
 /**
+ * Compute the block range from the manifest's own `number/<n>` forks without
+ * mutating or uploading anything. Returns null if the manifest has no blocks.
+ */
+export function getManifestBlockRange(manifest: MantarayNodeInstance): ManifestMeta | null {
+  const numbers = collectIndexedBlockNumbers(manifest)
+  if (numbers.length === 0) return null
+  let min = numbers[0]
+  let max = numbers[0]
+  for (const n of numbers) {
+    if (n < min) min = n
+    if (n > max) max = n
+  }
+  return { firstBlock: min.toString(), lastBlock: max.toString() }
+}
+
+/**
  * Compute the block range from the manifest's own `number/<n>` forks and
  * upsert it at path `meta` as a small JSON chunk. Deriving the range from the
  * manifest tree (rather than tracking it during `addBlocksToManifest`) makes
@@ -184,18 +200,11 @@ export async function writeBlockRangeMeta(
   options: { batchId: string; onProgress?: (msg: string) => void },
 ): Promise<ManifestMeta | null> {
   const log = options.onProgress ?? console.log
-  const numbers = collectIndexedBlockNumbers(manifest)
-  if (numbers.length === 0) {
+  const meta = getManifestBlockRange(manifest)
+  if (!meta) {
     log('no indexed blocks — skipping meta')
     return null
   }
-  let min = numbers[0]
-  let max = numbers[0]
-  for (const n of numbers) {
-    if (n < min) min = n
-    if (n > max) max = n
-  }
-  const meta: ManifestMeta = { firstBlock: min.toString(), lastBlock: max.toString() }
   const metaBytes = textEncoder.encode(JSON.stringify(meta))
   const { reference } = await bee.uploadData(options.batchId, metaBytes)
   const ref = hexToBytes(reference) as Reference

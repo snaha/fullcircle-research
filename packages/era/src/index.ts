@@ -14,6 +14,7 @@ export {
   openManifest,
   addBlocksToManifest,
   saveManifest,
+  getManifestBlockRange,
   writeBlockRangeMeta,
   type BlockRecord,
   type UploadResult,

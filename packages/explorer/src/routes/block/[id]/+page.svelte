@@ -60,7 +60,7 @@
   <nav class="flex items-center gap-2 text-sm text-muted-foreground">
     <a href="/" class="hover:text-foreground">/</a>
     <ChevronRightIcon class="size-4" />
-    <span>block</span>
+    <a href="/block" class="hover:text-foreground">block</a>
     <ChevronRightIcon class="size-4" />
     <span class="text-foreground font-mono">{block ? block.header.number : id}</span>
     {#if block}
