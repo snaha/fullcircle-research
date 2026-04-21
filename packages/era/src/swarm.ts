@@ -13,7 +13,7 @@ import { Bee } from '@ethersphere/bee-js'
 import MantarayJs from 'mantaray-js'
 import { encodeBlockBundle } from './bundle.js'
 
-const { MantarayNode, Utils } = MantarayJs
+const { MantarayNode, Utils, loadAllNodes } = MantarayJs
 
 // Reference type from mantaray-js (can't import from CJS module)
 type Reference = Uint8Array & { length: 32 | 64 }
@@ -36,6 +36,11 @@ export interface UploadResult {
   txHashesIndexed: number
 }
 
+export interface AddBlocksResult {
+  blocksUploaded: number
+  txHashesIndexed: number
+}
+
 export interface UploadOptions {
   beeUrl?: string // default: http://localhost:1633
   batchId: string // required postage batch ID
@@ -43,6 +48,8 @@ export interface UploadOptions {
   concurrency?: number // max concurrent uploads (default: 32)
   manifestHash?: string // existing manifest to extend
 }
+
+type MantarayNodeInstance = InstanceType<typeof MantarayJs.MantarayNode>
 
 // ---------- Public functions ----------
 
@@ -74,26 +81,17 @@ export async function* readBlocksNdjson(path: string): AsyncGenerator<BlockRecor
 }
 
 /**
- * Upload all blocks from a blocks.ndjson file and build a unified manifest.
+ * Create an in-memory Mantaray manifest — either fresh or by fully loading an
+ * existing manifest so it can be extended in place.
  *
- * The manifest has three index prefixes:
- *   - /number/<blockNumber> -> Swarm reference of the block bundle
- *   - /hash/<blockHash>     -> Swarm reference of the block bundle
- *   - /tx/<txHash>          -> Swarm reference of the block bundle containing the tx
- *
- * The bundle is `encodeBlockBundle(...)` — one fetch returns header, body,
- * receipts, and totalDifficulty for a block.
- *
- * Returns a single manifest reference that serves all three indexes.
+ * Use this together with `addBlocksToManifest` and `saveManifest` to upload
+ * many blocks.ndjson files into a single manifest that is saved exactly once.
  */
-export async function uploadBlocksAndBuildManifest(
-  blocksPath: string,
-  options: UploadOptions,
-): Promise<UploadResult> {
-  const beeUrl = options.beeUrl ?? 'http://localhost:1633'
-  const bee = new Bee(beeUrl)
+export async function openManifest(
+  bee: Bee,
+  options: { manifestHash?: string; onProgress?: (msg: string) => void },
+): Promise<MantarayNodeInstance> {
   const log = options.onProgress ?? console.log
-
   const manifest = new MantarayNode()
 
   if (options.manifestHash) {
@@ -104,15 +102,35 @@ export async function uploadBlocksAndBuildManifest(
     }
     const existingRef = hexToBytes(options.manifestHash) as Reference
     await manifest.load(storageLoader, existingRef)
+    // `load` only materializes the root node; descendants stay lazy. If we
+    // start adding forks without hydrating the tree, unloaded subtrees get
+    // dropped on save. Force-load everything before mutating.
+    await loadAllNodes(storageLoader, manifest)
   } else {
     manifest.setObfuscationKey = Utils.gen32Bytes()
   }
 
+  return manifest
+}
+
+/**
+ * Upload every block in a blocks.ndjson file and add three fork entries
+ * (/number/, /hash/, /tx/) per block into the given in-memory manifest.
+ *
+ * The manifest is NOT saved here — call `saveManifest` once after adding
+ * every range/era you want to include.
+ */
+export async function addBlocksToManifest(
+  bee: Bee,
+  manifest: MantarayNodeInstance,
+  blocksPath: string,
+  options: { batchId: string; onProgress?: (msg: string) => void },
+): Promise<AddBlocksResult> {
+  const log = options.onProgress ?? console.log
   let blocksUploaded = 0
   let txHashesIndexed = 0
 
   for await (const block of readBlocksNdjson(blocksPath)) {
-    // Encode the bundle: header + body + receipts + totalDifficulty
     const bundleBytes = encodeBlockBundle({
       rawHeader: hexToBytes(block.rawHeader),
       rawBody: hexToBytes(block.rawBody),
@@ -122,19 +140,15 @@ export async function uploadBlocksAndBuildManifest(
     const uploadResult = await bee.uploadData(options.batchId, bundleBytes)
     const ref = hexToBytes(uploadResult.reference) as Reference
 
-    // Add to manifest under /number/<blockNumber>
     manifest.addFork(textEncoder.encode(`number/${block.number}`), ref, {
       'Content-Type': 'application/octet-stream',
     })
 
-    // Add to manifest under /hash/<blockHash>
-    // Keep the 0x prefix and lowercase for consistency with standard Ethereum hex encoding
     const normalizedHash = block.hash.toLowerCase()
     manifest.addFork(textEncoder.encode(`hash/${normalizedHash}`), ref, {
       'Content-Type': 'application/octet-stream',
     })
 
-    // Add to manifest under /tx/<txHash> for each transaction
     for (const txHash of block.txHashes) {
       const normalizedTx = txHash.toLowerCase()
       manifest.addFork(textEncoder.encode(`tx/${normalizedTx}`), ref, {
@@ -149,11 +163,22 @@ export async function uploadBlocksAndBuildManifest(
     }
   }
 
-  // Pre-calculate total chunks by counting all nodes in the Mantaray tree
+  return { blocksUploaded, txHashesIndexed }
+}
+
+/**
+ * Persist the in-memory manifest to Swarm. Only dirty nodes are re-uploaded,
+ * so this is cheap to call once at the end of a multi-file run.
+ */
+export async function saveManifest(
+  bee: Bee,
+  manifest: MantarayNodeInstance,
+  options: { batchId: string; concurrency?: number; onProgress?: (msg: string) => void },
+): Promise<string> {
+  const log = options.onProgress ?? console.log
   const totalChunks = countMantarayNodes(manifest)
   log(`uploading manifest (${totalChunks} chunks)...`)
 
-  // Save manifest to Swarm with concurrency-limited uploads
   const concurrency = options.concurrency ?? 32
 
   const queuedUpload = createUploadQueue(
@@ -171,29 +196,20 @@ export async function uploadBlocksAndBuildManifest(
   )
 
   const manifestRef = await manifest.save(queuedUpload)
-
   const manifestReference = bytesToHex(manifestRef)
-
   log(`manifest saved: ${manifestReference}`)
-
-  return {
-    manifestReference,
-    blocksUploaded,
-    txHashesIndexed,
-  }
+  return manifestReference
 }
 
 // ---------- Internal helpers ----------
 
 const textEncoder = new TextEncoder()
 
-type MantarayNode = InstanceType<typeof MantarayJs.MantarayNode>
-
 /**
  * Count all nodes in a MantarayNode tree.
  * Each node = 1 chunk when uploaded to Swarm.
  */
-function countMantarayNodes(node: MantarayNode): number {
+function countMantarayNodes(node: MantarayNodeInstance): number {
   let count = 1 // This node
   if (!node.forks) return count
   for (const fork of Object.values(node.forks)) {
