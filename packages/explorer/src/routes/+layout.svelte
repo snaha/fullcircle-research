@@ -83,16 +83,12 @@
         <div
           class="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-5 py-1.5 text-xs text-muted-foreground"
         >
-          <a href="/block" class="transition-opacity hover:opacity-80">
-            <Badge variant="outline" class="font-mono">
-              bee · {settings.beeUrl.replace(/^https?:\/\//, '')}
-            </Badge>
-          </a>
-          <a href="/block" class="transition-opacity hover:opacity-80">
-            <Badge variant="secondary" class="font-mono">
-              manifest · {settings.manifestRef.slice(0, 10)}…{settings.manifestRef.slice(-6)}
-            </Badge>
-          </a>
+          <Badge variant="outline" class="font-mono">
+            bee · {settings.beeUrl.replace(/^https?:\/\//, '')}
+          </Badge>
+          <Badge variant="secondary" class="font-mono">
+            manifest · {settings.manifestRef.slice(0, 10)}…{settings.manifestRef.slice(-6)}
+          </Badge>
         </div>
       </div>
     {/if}

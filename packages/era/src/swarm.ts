@@ -44,6 +44,8 @@ export interface AddBlocksResult {
 export interface ManifestMeta {
   firstBlock: string
   lastBlock: string
+  blockCount: string
+  txCount: string
 }
 
 export interface UploadOptions {
@@ -176,7 +178,7 @@ export async function addBlocksToManifest(
  * mutating or uploading anything. Returns null if the manifest has no blocks.
  */
 export function getManifestBlockRange(manifest: MantarayNodeInstance): ManifestMeta | null {
-  const numbers = collectIndexedBlockNumbers(manifest)
+  const { numbers, txCount } = scanManifestTree(manifest)
   if (numbers.length === 0) return null
   let min = numbers[0]
   let max = numbers[0]
@@ -184,7 +186,12 @@ export function getManifestBlockRange(manifest: MantarayNodeInstance): ManifestM
     if (n < min) min = n
     if (n > max) max = n
   }
-  return { firstBlock: min.toString(), lastBlock: max.toString() }
+  return {
+    firstBlock: min.toString(),
+    lastBlock: max.toString(),
+    blockCount: numbers.length.toString(),
+    txCount: txCount.toString(),
+  }
 }
 
 /**
@@ -219,7 +226,9 @@ export async function writeBlockRangeMeta(
   manifest.addFork(textEncoder.encode('meta'), ref, {
     'Content-Type': 'application/json',
   })
-  log(`meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}`)
+  log(
+    `meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock} blockCount=${meta.blockCount} txCount=${meta.txCount}`,
+  )
   return meta
 }
 
@@ -264,14 +273,21 @@ const textEncoder = new TextEncoder()
 
 const textDecoder = new TextDecoder()
 const NUMBER_PREFIX = 'number/'
+const TX_PREFIX = 'tx/'
+
+interface ManifestScan {
+  numbers: bigint[]
+  txCount: bigint
+}
 
 /**
- * Walk every path in the manifest and collect block numbers from forks at
- * `number/<n>`. Assumes the tree is already hydrated (openManifest does this
- * via loadAllNodes).
+ * Walk every path in the manifest once and collect block numbers from
+ * `number/<n>` forks plus the count of `tx/<hash>` forks. Assumes the tree is
+ * already hydrated (openManifest does this via loadAllNodes).
  */
-function collectIndexedBlockNumbers(root: MantarayNodeInstance): bigint[] {
+function scanManifestTree(root: MantarayNodeInstance): ManifestScan {
   const numbers: bigint[] = []
+  let txCount = 0n
 
   function walk(node: MantarayNodeInstance, accumulated: Uint8Array): void {
     if (node.getEntry) {
@@ -279,6 +295,8 @@ function collectIndexedBlockNumbers(root: MantarayNodeInstance): bigint[] {
       if (path.startsWith(NUMBER_PREFIX)) {
         const rest = path.slice(NUMBER_PREFIX.length)
         if (/^\d+$/.test(rest)) numbers.push(BigInt(rest))
+      } else if (path.startsWith(TX_PREFIX)) {
+        txCount++
       }
     }
     if (!node.forks) return
@@ -291,7 +309,7 @@ function collectIndexedBlockNumbers(root: MantarayNodeInstance): bigint[] {
   }
 
   walk(root, new Uint8Array())
-  return numbers
+  return { numbers, txCount }
 }
 
 /**

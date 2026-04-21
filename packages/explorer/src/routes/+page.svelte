@@ -4,7 +4,13 @@
   import * as Card from '$lib/components/ui/card'
   import { formatEth, relativeTime, shortHash } from '$lib/format'
   import { hasManifest, settings } from '$lib/settings.svelte'
-  import { fetchBlock, fetchManifestMeta, type FetchedBlock, type ManifestMeta } from '$lib/swarm'
+  import {
+    fetchBlock,
+    fetchManifestMeta,
+    hasGaps,
+    type FetchedBlock,
+    type ManifestMeta,
+  } from '$lib/swarm'
   import ArrowRightIcon from '@lucide/svelte/icons/arrow-right'
 
   const LATEST_COUNT = 10
@@ -103,6 +109,25 @@
             <dd class="font-mono">
               {#if meta}
                 {formatBlock(meta.firstBlock)} – {formatBlock(meta.lastBlock)}
+                {#if hasGaps(meta)}
+                  <Badge variant="destructive" class="ml-2 font-mono">gaps</Badge>
+                {/if}
+              {:else}
+                <span class="text-muted-foreground">loading…</span>
+              {/if}
+            </dd>
+            <dt class="text-muted-foreground">Blocks</dt>
+            <dd class="font-mono">
+              {#if meta}
+                {formatBlock(meta.blockCount)}
+              {:else}
+                <span class="text-muted-foreground">loading…</span>
+              {/if}
+            </dd>
+            <dt class="text-muted-foreground">Transactions</dt>
+            <dd class="font-mono">
+              {#if meta}
+                {formatBlock(meta.txCount)}
               {:else}
                 <span class="text-muted-foreground">loading…</span>
               {/if}

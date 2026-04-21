@@ -5,7 +5,13 @@
   import * as Card from '$lib/components/ui/card'
   import { formatEth, relativeTime, shortHash } from '$lib/format'
   import { hasManifest, settings } from '$lib/settings.svelte'
-  import { fetchBlock, fetchManifestMeta, type FetchedBlock, type ManifestMeta } from '$lib/swarm'
+  import {
+    fetchBlock,
+    fetchManifestMeta,
+    hasGaps,
+    type FetchedBlock,
+    type ManifestMeta,
+  } from '$lib/swarm'
   import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left'
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
 
@@ -116,9 +122,14 @@
         <Card.Title>Blocks</Card.Title>
         <Card.Description>
           {#if meta}
-            {formatBlock(meta.firstBlock)} – {formatBlock(meta.lastBlock)} ·
+            {formatBlock(meta.firstBlock)} – {formatBlock(meta.lastBlock)} · {formatBlock(
+              meta.blockCount,
+            )} blocks · {formatBlock(meta.txCount)} txns
             {#if totalPages > 0}
-              page {pageNum + 1} of {formatBlock(totalPages)}
+              · page {pageNum + 1} of {formatBlock(totalPages)}
+            {/if}
+            {#if hasGaps(meta)}
+              <Badge variant="destructive" class="ml-2 font-mono">gaps</Badge>
             {/if}
           {:else if hasManifest()}
             Reading <code class="font-mono">/meta</code>…

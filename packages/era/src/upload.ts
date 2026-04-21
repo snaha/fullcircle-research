@@ -62,6 +62,33 @@ if (!args.batchId) {
 
 // ---------- Main ----------
 
+function formatDuration(ms: number): string {
+  const h = Math.floor(ms / 3_600_000)
+  const m = Math.floor((ms % 3_600_000) / 60_000)
+  const s = Math.floor((ms % 60_000) / 1_000)
+  const msPart = ms % 1_000
+
+  // Drop leading zero units, but pad subsequent units so columns line up.
+  let pretty: string
+  if (h > 0) {
+    pretty = `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s ${String(msPart).padStart(3, '0')}ms`
+  } else if (m > 0) {
+    pretty = `${m}m ${String(s).padStart(2, '0')}s ${String(msPart).padStart(3, '0')}ms`
+  } else if (s > 0) {
+    pretty = `${s}s ${String(msPart).padStart(3, '0')}ms`
+  } else {
+    pretty = `${msPart}ms`
+  }
+  return `${ms} ms (${pretty})`
+}
+
+async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const started = Date.now()
+  const result = await fn()
+  console.log(`⏱  ${label}: ${formatDuration(Date.now() - started)}`)
+  return result
+}
+
 const batchId = args.batchId
 const beeUrl = args.beeUrl ?? 'http://localhost:1633'
 const bee = new Bee(beeUrl)
@@ -84,10 +111,12 @@ if (uploadable.length === 0) {
 // Single manifest for the whole range: load once (or start fresh), mutate as
 // we process each blocks file, save exactly once at the end. Uploading a
 // growing manifest per-era would be O(N²) chunks.
-const manifest = await openManifest(bee, {
-  manifestHash: args.manifestHash,
-  onProgress: (msg) => console.log(msg),
-})
+const manifest = await timed('open manifest', () =>
+  openManifest(bee, {
+    manifestHash: args.manifestHash,
+    onProgress: (msg) => console.log(msg),
+  }),
+)
 
 const rangeBefore = getManifestBlockRange(manifest)
 if (rangeBefore) {
@@ -111,19 +140,23 @@ for (const t of uploadable) {
   totals.blocksUploaded += res.blocksUploaded
   totals.txHashesIndexed += res.txHashesIndexed
   console.log(
-    `       added ${res.blocksUploaded} blocks, ${res.txHashesIndexed} txs in ${Date.now() - started} ms`,
+    `       added ${res.blocksUploaded} blocks, ${res.txHashesIndexed} txs in ${formatDuration(Date.now() - started)}`,
   )
 }
 
 console.log('\n== manifest ==')
-const meta = await writeBlockRangeMeta(bee, manifest, {
-  batchId,
-  onProgress: (msg) => console.log(`       ${msg}`),
-})
-const manifestReference = await saveManifest(bee, manifest, {
-  batchId,
-  onProgress: (msg) => console.log(`       ${msg}`),
-})
+const meta = await timed('write /meta', () =>
+  writeBlockRangeMeta(bee, manifest, {
+    batchId,
+    onProgress: (msg) => console.log(`       ${msg}`),
+  }),
+)
+const manifestReference = await timed('save manifest', () =>
+  saveManifest(bee, manifest, {
+    batchId,
+    onProgress: (msg) => console.log(`       ${msg}`),
+  }),
+)
 
 if (meta) {
   console.log(`after:  firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}`)
@@ -160,7 +193,7 @@ const manifestData = {
 await writeFile(manifestPath, JSON.stringify(manifestData, null, 2))
 
 console.log(
-  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${elapsed} ms`,
+  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${formatDuration(elapsed)}`,
 )
 console.log(`       manifest: ${manifestReference}`)
 console.log(`       written:  ${manifestPath}`)
