@@ -11,10 +11,13 @@ export {
 export {
   hexToBytes,
   readBlocksNdjson,
-  uploadBlocksAndBuildManifest,
+  openManifest,
+  addBlocksToManifest,
+  saveManifest,
   type BlockRecord,
   type UploadResult,
   type UploadOptions,
+  type AddBlocksResult,
 } from './swarm.js'
 
 export {

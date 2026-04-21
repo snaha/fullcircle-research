@@ -9,8 +9,9 @@
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { DATA_DIR, header, resolveTargets } from './cli-shared.js'
-import { uploadBlocksAndBuildManifest } from './swarm.js'
+import { Bee } from '@ethersphere/bee-js'
+import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
+import { addBlocksToManifest, openManifest, saveManifest } from './swarm.js'
 
 // ---------- Parse arguments ----------
 
@@ -55,44 +56,86 @@ if (!args.batchId) {
 
 // ---------- Main ----------
 
+const batchId = args.batchId
+const beeUrl = args.beeUrl ?? 'http://localhost:1633'
+const bee = new Bee(beeUrl)
+
 const targets = await resolveTargets(args.target)
-
+const uploadable: Target[] = []
 for (const t of targets) {
-  console.log(header(t))
-
   if (!existsSync(t.blocksPath)) {
-    console.error(`error: no blocks file at ${t.blocksPath}`)
-    console.error('       run "pnpm era:process" first to generate the blocks.ndjson file')
+    console.error(`skip   no blocks file at ${t.blocksPath} — run "pnpm era:process" first`)
     continue
   }
+  uploadable.push(t)
+}
 
+if (uploadable.length === 0) {
+  console.error('error: nothing to upload')
+  process.exit(1)
+}
+
+// Single manifest for the whole range: load once (or start fresh), mutate as
+// we process each blocks file, save exactly once at the end. Uploading a
+// growing manifest per-era would be O(N²) chunks.
+const manifest = await openManifest(bee, {
+  manifestHash: args.manifestHash,
+  onProgress: (msg) => console.log(msg),
+})
+
+const totals = { blocksUploaded: 0, txHashesIndexed: 0 }
+const runStarted = Date.now()
+
+for (const t of uploadable) {
+  console.log(header(t))
   const started = Date.now()
 
-  const result = await uploadBlocksAndBuildManifest(t.blocksPath, {
-    beeUrl: args.beeUrl,
-    batchId: args.batchId,
-    manifestHash: args.manifestHash,
+  const res = await addBlocksToManifest(bee, manifest, t.blocksPath, {
+    batchId,
     onProgress: (msg) => console.log(`       ${msg}`),
   })
 
-  const elapsed = Date.now() - started
-
-  // Write manifest metadata file
-  const manifestPath = resolve(DATA_DIR, `${t.fileBase}.manifest.json`)
-  const manifestData = {
-    era: t.era,
-    uploadedAt: new Date().toISOString(),
-    beeUrl: args.beeUrl ?? 'http://localhost:1633',
-    batchId: args.batchId,
-    manifestReference: result.manifestReference,
-    blocksUploaded: result.blocksUploaded,
-    txHashesIndexed: result.txHashesIndexed,
-  }
-  await writeFile(manifestPath, JSON.stringify(manifestData, null, 2))
-
+  totals.blocksUploaded += res.blocksUploaded
+  totals.txHashesIndexed += res.txHashesIndexed
   console.log(
-    `upload ${result.blocksUploaded} blocks, ${result.txHashesIndexed} txs in ${elapsed} ms`,
+    `       added ${res.blocksUploaded} blocks, ${res.txHashesIndexed} txs in ${Date.now() - started} ms`,
   )
-  console.log(`       manifest: ${result.manifestReference}`)
-  console.log(`       written:  ${manifestPath}`)
 }
+
+console.log('\n== manifest ==')
+const manifestReference = await saveManifest(bee, manifest, {
+  batchId,
+  onProgress: (msg) => console.log(`       ${msg}`),
+})
+
+const elapsed = Date.now() - runStarted
+
+// Write one manifest metadata file describing the whole range.
+const firstEra = uploadable[0].era
+const lastEra = uploadable[uploadable.length - 1].era
+const rangeLabel =
+  firstEra !== null && lastEra !== null
+    ? firstEra === lastEra
+      ? `${firstEra}`
+      : `${firstEra}-${lastEra}`
+    : uploadable[0].fileBase
+
+const manifestPath = resolve(DATA_DIR, `eras-${rangeLabel}.manifest.json`)
+const manifestData = {
+  eras: uploadable.map((t) => t.era).filter((e): e is number => e !== null),
+  files: uploadable.map((t) => t.fileBase),
+  uploadedAt: new Date().toISOString(),
+  beeUrl,
+  batchId,
+  extendedFrom: args.manifestHash ?? null,
+  manifestReference,
+  blocksUploaded: totals.blocksUploaded,
+  txHashesIndexed: totals.txHashesIndexed,
+}
+await writeFile(manifestPath, JSON.stringify(manifestData, null, 2))
+
+console.log(
+  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${elapsed} ms`,
+)
+console.log(`       manifest: ${manifestReference}`)
+console.log(`       written:  ${manifestPath}`)
