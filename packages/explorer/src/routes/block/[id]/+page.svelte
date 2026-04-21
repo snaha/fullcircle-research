@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from '$app/state'
   import { Badge } from '$lib/components/ui/badge'
+  import { Button } from '$lib/components/ui/button'
   import * as Card from '$lib/components/ui/card'
   import {
     formatEth,
@@ -12,6 +13,7 @@
   } from '$lib/format'
   import { hasManifest, settings } from '$lib/settings.svelte'
   import { fetchBlock, type FetchedBlock } from '$lib/swarm'
+  import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left'
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
 
   let id = $derived(page.params.id ?? '')
@@ -55,10 +57,36 @@
 </script>
 
 <main class="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8">
-  <nav class="flex items-center gap-1 text-sm text-muted-foreground">
-    <a href="/" class="hover:text-foreground">Home</a>
+  <nav class="flex items-center gap-2 text-sm text-muted-foreground">
+    <a href="/" class="hover:text-foreground">/</a>
     <ChevronRightIcon class="size-4" />
-    <span class="text-foreground">Block {id}</span>
+    <span>block</span>
+    <ChevronRightIcon class="size-4" />
+    <span class="text-foreground font-mono">{block ? block.header.number : id}</span>
+    {#if block}
+      {@const n = block.header.number}
+      <div class="ml-1 flex items-center gap-1">
+        <Button
+          variant="outline"
+          size="icon-xs"
+          href={n > 0n ? `/block/${n - 1n}` : undefined}
+          disabled={n === 0n}
+          aria-label="Previous block"
+          title="Previous block"
+        >
+          <ChevronLeftIcon />
+        </Button>
+        <Button
+          variant="outline"
+          size="icon-xs"
+          href={`/block/${n + 1n}`}
+          aria-label="Next block"
+          title="Next block"
+        >
+          <ChevronRightIcon />
+        </Button>
+      </div>
+    {/if}
   </nav>
 
   {#if loading}
@@ -71,18 +99,6 @@
     </Card.Root>
   {:else if block}
     {@const h = block.header}
-    <header class="flex flex-col gap-2">
-      <div class="flex items-baseline gap-3 flex-wrap">
-        <h1 class="text-2xl font-semibold tracking-tight">
-          Block <span class="font-mono">#{h.number}</span>
-        </h1>
-        <Badge variant="secondary">{block.body.transactions.length} txs</Badge>
-      </div>
-      <p class="break-all font-mono text-sm text-muted-foreground">{block.hash}</p>
-      <p class="text-sm text-muted-foreground">
-        {formatTimestamp(h.timestamp)} · {relativeTime(h.timestamp)}
-      </p>
-    </header>
 
     <Card.Root>
       <Card.Header>
@@ -96,7 +112,7 @@
           <dt class="text-muted-foreground">Timestamp</dt>
           <dd class="font-mono">
             {formatTimestamp(h.timestamp)}
-            <span class="text-muted-foreground">({h.timestamp})</span>
+            <span class="text-muted-foreground">· {relativeTime(h.timestamp)} ({h.timestamp})</span>
           </dd>
 
           <dt class="text-muted-foreground">Transactions</dt>
@@ -139,6 +155,9 @@
             <dt class="text-muted-foreground">Total difficulty</dt>
             <dd class="font-mono">{block.totalDifficulty.toLocaleString()}</dd>
           {/if}
+
+          <dt class="text-muted-foreground">Hash</dt>
+          <dd class="break-all font-mono">{block.hash}</dd>
 
           <dt class="text-muted-foreground">Parent hash</dt>
           <dd class="break-all font-mono">

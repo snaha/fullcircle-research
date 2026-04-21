@@ -1,8 +1,14 @@
 <script lang="ts">
   import { page } from '$app/state'
-  import { Badge } from '$lib/components/ui/badge'
   import * as Card from '$lib/components/ui/card'
-  import { formatEth, formatGwei, formatTimestamp, hexByteLength, relativeTime } from '$lib/format'
+  import {
+    formatEth,
+    formatGwei,
+    formatTimestamp,
+    hexByteLength,
+    relativeTime,
+    shortHash,
+  } from '$lib/format'
   import { hasManifest, settings } from '$lib/settings.svelte'
   import { fetchBlock, type FetchedBlock } from '$lib/swarm'
   import type { DecodedTransaction } from '@fullcircle/era/bundle'
@@ -93,10 +99,12 @@
 </script>
 
 <main class="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8">
-  <nav class="flex items-center gap-1 text-sm text-muted-foreground">
-    <a href="/" class="hover:text-foreground">Home</a>
+  <nav class="flex items-center gap-2 text-sm text-muted-foreground">
+    <a href="/" class="hover:text-foreground">/</a>
     <ChevronRightIcon class="size-4" />
-    <span class="text-foreground">Transaction</span>
+    <span>tx</span>
+    <ChevronRightIcon class="size-4" />
+    <span class="text-foreground font-mono">{shortHash(hash)}</span>
   </nav>
 
   {#if loading}
@@ -108,20 +116,15 @@
       </Card.Content>
     </Card.Root>
   {:else if tx && block}
-    <header class="flex flex-col gap-2">
-      <div class="flex items-baseline gap-3 flex-wrap">
-        <h1 class="text-2xl font-semibold tracking-tight">Transaction</h1>
-        <Badge variant="outline" class="font-mono">{txTypeLabel(tx.type)}</Badge>
-      </div>
-      <p class="break-all font-mono text-sm text-muted-foreground">{tx.hash}</p>
-    </header>
-
     <Card.Root>
       <Card.Header>
         <Card.Title>Overview</Card.Title>
       </Card.Header>
       <Card.Content>
         <dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2.5 text-sm">
+          <dt class="text-muted-foreground">Transaction hash</dt>
+          <dd class="break-all font-mono">{tx.hash}</dd>
+
           <dt class="text-muted-foreground">Block</dt>
           <dd class="font-mono">
             <a href="/block/{block.header.number}" class="underline hover:no-underline"
