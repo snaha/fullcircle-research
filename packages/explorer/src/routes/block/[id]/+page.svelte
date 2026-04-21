@@ -11,7 +11,7 @@
     relativeTime,
     shortHash,
   } from '$lib/format'
-  import { hasManifest, settings } from '$lib/settings.svelte'
+  import { hasSource, settings } from '$lib/settings.svelte'
   import { fetchBlock, type FetchedBlock } from '$lib/swarm'
   import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left'
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
@@ -24,15 +24,15 @@
   let loading = $state(false)
 
   async function load() {
-    if (!hasManifest()) {
-      error = 'No manifest reference set — open Settings above.'
+    if (!hasSource()) {
+      error = 'No source set — open Settings above.'
       return
     }
     loading = true
     error = null
     block = null
     try {
-      block = await fetchBlock(index, id, settings)
+      block = await fetchBlock(index, id)
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {
@@ -43,7 +43,10 @@
   $effect(() => {
     void id
     void settings.beeUrl
+    void settings.source
     void settings.manifestRef
+    void settings.potByNumber
+    void settings.potByHash
     load()
   })
 

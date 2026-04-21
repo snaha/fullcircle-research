@@ -27,8 +27,11 @@ export {
   openPotIndexes,
   addBlocksToPot,
   savePotIndexes,
+  getPotBlockRange,
+  writePotBlockRangeMeta,
   type PotIndexes,
   type PotIndexRefs,
+  type PotMeta,
   type OpenPotIndexesOptions,
 } from './swarm-pot.js'
 

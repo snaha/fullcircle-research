@@ -4,13 +4,13 @@
   import { Button } from '$lib/components/ui/button'
   import * as Card from '$lib/components/ui/card'
   import { formatEth, relativeTime, shortHash } from '$lib/format'
-  import { hasManifest, settings } from '$lib/settings.svelte'
+  import { hasSource, settings } from '$lib/settings.svelte'
   import {
     fetchBlock,
-    fetchManifestMeta,
+    fetchMeta,
     hasGaps,
     type FetchedBlock,
-    type ManifestMeta,
+    type SourceMeta,
   } from '$lib/swarm'
   import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left'
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
@@ -35,7 +35,7 @@
 
   let pageNum = $derived(Math.max(0, Number(page.url.searchParams.get('p') ?? 0) || 0))
 
-  let meta = $state<ManifestMeta | null>(null)
+  let meta = $state<SourceMeta | null>(null)
   // PER_PAGE rows plus one extra predecessor for the interval of the last row.
   let blocks = $state<FetchedBlock[]>([])
   let loading = $state(false)
@@ -58,9 +58,12 @@
   })
 
   $effect(() => {
-    const beeUrl = settings.beeUrl
-    const manifestRef = settings.manifestRef
-    if (!hasManifest()) {
+    void settings.beeUrl
+    void settings.source
+    void settings.manifestRef
+    void settings.potByNumber
+    void settings.potMeta
+    if (!hasSource()) {
       meta = null
       blocks = []
       error = null
@@ -70,7 +73,7 @@
     let cancelled = false
     error = null
     ;(async () => {
-      const metaResult = meta ?? (await fetchManifestMeta({ beeUrl, manifestRef }))
+      const metaResult = meta ?? (await fetchMeta())
       if (cancelled) return
       if (!meta) meta = metaResult
       const last = BigInt(metaResult.lastBlock)
@@ -88,9 +91,7 @@
         const count = Number(available < want ? available : want)
         const numbers: bigint[] = []
         for (let i = 0; i < count; i++) numbers.push(top - BigInt(i))
-        const results = await Promise.all(
-          numbers.map((n) => fetchBlock('number', n.toString(), { beeUrl, manifestRef })),
-        )
+        const results = await Promise.all(numbers.map((n) => fetchBlock('number', n.toString())))
         if (!cancelled) blocks = results
       } catch (err) {
         if (!cancelled) error = err instanceof Error ? err.message : String(err)
@@ -131,10 +132,10 @@
             {#if hasGaps(meta)}
               <Badge variant="destructive" class="ml-2 font-mono">gaps</Badge>
             {/if}
-          {:else if hasManifest()}
+          {:else if hasSource()}
             Reading <code class="font-mono">/meta</code>…
           {:else}
-            No manifest set.
+            No source set.
           {/if}
         </Card.Description>
       </div>
@@ -165,9 +166,9 @@
       {/if}
     </Card.Header>
     <Card.Content class="px-0">
-      {#if !hasManifest()}
+      {#if !hasSource()}
         <p class="px-6 text-sm text-muted-foreground">
-          Open <Badge variant="outline">Settings</Badge> and paste a manifest reference.
+          Open <Badge variant="outline">Settings</Badge> and paste a manifest or POT reference.
         </p>
       {:else if loading && rows.length === 0}
         <p class="px-6 text-sm text-muted-foreground">Loading blocks…</p>

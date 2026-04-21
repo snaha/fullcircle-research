@@ -9,7 +9,7 @@
     relativeTime,
     shortHash,
   } from '$lib/format'
-  import { hasManifest, settings } from '$lib/settings.svelte'
+  import { hasSource, hasTxIndex, settings } from '$lib/settings.svelte'
   import { fetchBlock, type FetchedBlock } from '$lib/swarm'
   import type { DecodedTransaction } from '@fullcircle/era/bundle'
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
@@ -23,8 +23,12 @@
   let loading = $state(false)
 
   async function load() {
-    if (!hasManifest()) {
-      error = 'No manifest reference set — open Settings above.'
+    if (!hasSource()) {
+      error = 'No source set — open Settings above.'
+      return
+    }
+    if (!hasTxIndex()) {
+      error = 'Transaction lookup is not available on this source (no byTx index).'
       return
     }
     loading = true
@@ -33,7 +37,7 @@
     tx = null
     txIndex = -1
     try {
-      block = await fetchBlock('tx', hash, settings)
+      block = await fetchBlock('tx', hash)
       const idx = block.body.transactions.findIndex((t) => t.hash === hash)
       if (idx < 0) {
         error = 'Transaction not found in returned block bundle.'
@@ -51,7 +55,9 @@
   $effect(() => {
     void hash
     void settings.beeUrl
+    void settings.source
     void settings.manifestRef
+    void settings.potByTx
     load()
   })
 
