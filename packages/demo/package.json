@@ -15,6 +15,7 @@
     "check:all": "pnpm lint && pnpm check && pnpm knip"
   },
   "dependencies": {
+    "@fullcircle/rpc": "workspace:*",
     "viem": "^2.21.0"
   },
   "devDependencies": {

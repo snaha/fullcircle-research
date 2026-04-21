@@ -18,11 +18,15 @@ import {
   web3ClientVersion,
   type RpcParams,
 } from './handlers.js'
+import type { SupportedMethod } from './methods.js'
 import type { DataStore } from './store.js'
 
 type Handler = (store: DataStore, params: RpcParams) => Promise<unknown>
 
-const METHODS: Record<string, Handler> = {
+// Intersection keeps arbitrary string indexing at the call site while the
+// SupportedMethod half forces every advertised method to have a handler —
+// so the dispatcher can't drift from ./methods.ts.
+const METHODS: Record<string, Handler> & Record<SupportedMethod, Handler> = {
   eth_blockNumber: ethBlockNumber,
   eth_chainId: ethChainId,
   eth_getBlockByNumber: ethGetBlockByNumber,
