@@ -11,7 +11,7 @@ import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
 import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
-import { addBlocksToManifest, openManifest, saveManifest } from './swarm.js'
+import { addBlocksToManifest, openManifest, saveManifest, writeBlockRangeMeta } from './swarm.js'
 
 // ---------- Parse arguments ----------
 
@@ -103,6 +103,10 @@ for (const t of uploadable) {
 }
 
 console.log('\n== manifest ==')
+const meta = await writeBlockRangeMeta(bee, manifest, {
+  batchId,
+  onProgress: (msg) => console.log(`       ${msg}`),
+})
 const manifestReference = await saveManifest(bee, manifest, {
   batchId,
   onProgress: (msg) => console.log(`       ${msg}`),
@@ -129,6 +133,8 @@ const manifestData = {
   batchId,
   extendedFrom: args.manifestHash ?? null,
   manifestReference,
+  firstBlock: meta?.firstBlock ?? null,
+  lastBlock: meta?.lastBlock ?? null,
   blocksUploaded: totals.blocksUploaded,
   txHashesIndexed: totals.txHashesIndexed,
 }

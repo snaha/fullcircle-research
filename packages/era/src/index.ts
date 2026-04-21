@@ -14,10 +14,12 @@ export {
   openManifest,
   addBlocksToManifest,
   saveManifest,
+  writeBlockRangeMeta,
   type BlockRecord,
   type UploadResult,
   type UploadOptions,
   type AddBlocksResult,
+  type ManifestMeta,
 } from './swarm.js'
 
 export {

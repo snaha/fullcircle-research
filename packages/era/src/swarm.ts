@@ -41,6 +41,11 @@ export interface AddBlocksResult {
   txHashesIndexed: number
 }
 
+export interface ManifestMeta {
+  firstBlock: string
+  lastBlock: string
+}
+
 export interface UploadOptions {
   beeUrl?: string // default: http://localhost:1633
   batchId: string // required postage batch ID
@@ -167,6 +172,49 @@ export async function addBlocksToManifest(
 }
 
 /**
+ * Compute the block range from the manifest's own `number/<n>` forks and
+ * upsert it at path `meta` as a small JSON chunk. Deriving the range from the
+ * manifest tree (rather than tracking it during `addBlocksToManifest`) makes
+ * `/meta` a pure function of the indexed blocks — it cannot drift out of sync
+ * with what the manifest actually contains.
+ */
+export async function writeBlockRangeMeta(
+  bee: Bee,
+  manifest: MantarayNodeInstance,
+  options: { batchId: string; onProgress?: (msg: string) => void },
+): Promise<ManifestMeta | null> {
+  const log = options.onProgress ?? console.log
+  const numbers = collectIndexedBlockNumbers(manifest)
+  if (numbers.length === 0) {
+    log('no indexed blocks — skipping meta')
+    return null
+  }
+  let min = numbers[0]
+  let max = numbers[0]
+  for (const n of numbers) {
+    if (n < min) min = n
+    if (n > max) max = n
+  }
+  const meta: ManifestMeta = { firstBlock: min.toString(), lastBlock: max.toString() }
+  const metaBytes = textEncoder.encode(JSON.stringify(meta))
+  const { reference } = await bee.uploadData(options.batchId, metaBytes)
+  const ref = hexToBytes(reference) as Reference
+
+  // addFork on an existing path would collide with the old entry's metadata;
+  // remove first so the new meta chunk fully replaces any prior one.
+  try {
+    manifest.removePath(textEncoder.encode('meta'))
+  } catch {
+    // no prior meta fork — fine
+  }
+  manifest.addFork(textEncoder.encode('meta'), ref, {
+    'Content-Type': 'application/json',
+  })
+  log(`meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}`)
+  return meta
+}
+
+/**
  * Persist the in-memory manifest to Swarm. Only dirty nodes are re-uploaded,
  * so this is cheap to call once at the end of a multi-file run.
  */
@@ -204,6 +252,38 @@ export async function saveManifest(
 // ---------- Internal helpers ----------
 
 const textEncoder = new TextEncoder()
+
+const textDecoder = new TextDecoder()
+const NUMBER_PREFIX = 'number/'
+
+/**
+ * Walk every path in the manifest and collect block numbers from forks at
+ * `number/<n>`. Assumes the tree is already hydrated (openManifest does this
+ * via loadAllNodes).
+ */
+function collectIndexedBlockNumbers(root: MantarayNodeInstance): bigint[] {
+  const numbers: bigint[] = []
+
+  function walk(node: MantarayNodeInstance, accumulated: Uint8Array): void {
+    if (node.getEntry) {
+      const path = textDecoder.decode(accumulated)
+      if (path.startsWith(NUMBER_PREFIX)) {
+        const rest = path.slice(NUMBER_PREFIX.length)
+        if (/^\d+$/.test(rest)) numbers.push(BigInt(rest))
+      }
+    }
+    if (!node.forks) return
+    for (const fork of Object.values(node.forks)) {
+      const combined = new Uint8Array(accumulated.length + fork.prefix.length)
+      combined.set(accumulated)
+      combined.set(fork.prefix, accumulated.length)
+      walk(fork.node, combined)
+    }
+  }
+
+  walk(root, new Uint8Array())
+  return numbers
+}
 
 /**
  * Count all nodes in a MantarayNode tree.
