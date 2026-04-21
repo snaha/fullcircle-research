@@ -1,0 +1,281 @@
+// CLI entry point for uploading block data to Swarm using SQLite indexing.
+//
+// This is an alternative to the Mantaray manifest approach. Instead of
+// creating a manifest with paths for each block/tx, this creates a SQLite
+// database that can be queried via sql.js-httpvfs with Swarm range requests.
+//
+// Usage:
+//   pnpm era:upload-sqlite --batch-id <postage-batch-id> [--db <path>] [range]
+//
+// Examples:
+//   pnpm era:upload-sqlite --batch-id abc123... 0
+//   pnpm era:upload-sqlite --batch-id abc123... --db ./my-index.sqlite 0..6
+//   pnpm era:upload-sqlite --bee-url http://bee.example.com --batch-id abc123... 5
+//   pnpm era:upload-sqlite --batch-id abc123... --block 100 0  # single block
+
+import { createReadStream, existsSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
+import { createInterface } from 'node:readline'
+import { resolve } from 'node:path'
+import { Bee } from '@ethersphere/bee-js'
+import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
+import { openSqliteIndexer } from './swarm-sqlite.js'
+
+// ---------- Parse arguments ----------
+
+function parseArgs(argv: string[]): {
+  beeUrl?: string
+  batchId?: string
+  dbPath?: string
+  statePath?: string
+  target?: string
+  blockNumber?: number
+  perBlock?: number
+} {
+  const result: {
+    beeUrl?: string
+    batchId?: string
+    dbPath?: string
+    statePath?: string
+    target?: string
+    blockNumber?: number
+    perBlock?: number
+  } = {}
+
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--bee-url' && argv[i + 1]) {
+      result.beeUrl = argv[++i]
+    } else if (arg === '--batch-id' && argv[i + 1]) {
+      result.batchId = argv[++i]
+    } else if (arg === '--db' && argv[i + 1]) {
+      result.dbPath = argv[++i]
+    } else if (arg === '--state' && argv[i + 1]) {
+      result.statePath = argv[++i]
+    } else if (arg === '--block' && argv[i + 1]) {
+      result.blockNumber = parseInt(argv[++i], 10)
+    } else if (arg === '--per-block' && argv[i + 1]) {
+      result.perBlock = parseInt(argv[++i], 10)
+    } else if (!arg.startsWith('--')) {
+      result.target = arg
+    }
+  }
+
+  return result
+}
+
+const args = parseArgs(process.argv)
+
+if (!args.batchId) {
+  console.error('error: --batch-id is required')
+  console.error('')
+  console.error('Usage:')
+  console.error('  pnpm era:upload-sqlite --batch-id <postage-batch-id> [--db <path>] [range]')
+  console.error('')
+  console.error('Options:')
+  console.error('  --batch-id <id>     Postage batch ID (required)')
+  console.error('  --bee-url <url>     Bee node URL (default: http://localhost:1633)')
+  console.error('  --db <path>         SQLite database path (default: data/index.sqlite)')
+  console.error('  --state <path>      Page tracking state file (default: data/index.state.json)')
+  console.error('  --block <number>    Upload only a specific block number')
+  console.error('  --per-block <n>     Process N blocks one at a time with full sync after each')
+  console.error('')
+  console.error('Examples:')
+  console.error('  pnpm era:upload-sqlite --batch-id abc123... 0')
+  console.error('  pnpm era:upload-sqlite --batch-id abc123... --db ./my-index.sqlite 0..6')
+  console.error('  pnpm era:upload-sqlite --batch-id abc123... --block 100 0')
+  console.error('  pnpm era:upload-sqlite --batch-id abc123... --per-block 5 0')
+  process.exit(1)
+}
+
+// ---------- Main ----------
+
+const batchId = args.batchId
+const beeUrl = args.beeUrl ?? 'http://localhost:1633'
+const bee = new Bee(beeUrl)
+
+const dbPath = args.dbPath ?? resolve(DATA_DIR, 'index.sqlite')
+const statePath = args.statePath ?? resolve(DATA_DIR, 'index.state.json')
+
+const targets = await resolveTargets(args.target)
+const uploadable: Target[] = []
+for (const t of targets) {
+  if (!existsSync(t.blocksPath)) {
+    console.error(`skip   no blocks file at ${t.blocksPath} — run "pnpm era:process" first`)
+    continue
+  }
+  uploadable.push(t)
+}
+
+if (uploadable.length === 0) {
+  console.error('error: nothing to upload')
+  process.exit(1)
+}
+
+// Open SQLite indexer and load previous state
+console.log(`\n== SQLite indexer ==`)
+console.log(`       db: ${dbPath}`)
+console.log(`       state: ${statePath}`)
+
+const indexer = openSqliteIndexer({
+  dbPath,
+  onProgress: (msg) => console.log(`       ${msg}`),
+})
+
+// Load previous page tracking state (for incremental sync)
+await indexer.loadState(statePath)
+
+const totals = { blocksAdded: 0, blocksSkipped: 0, txHashesAdded: 0 }
+const runStarted = Date.now()
+
+// Per-block mode: process blocks one at a time with full sync after each
+let syncResult: {
+  pageTableRef: string
+  totalPages: number
+  pagesUploaded: number
+  pagesSkipped: number
+} = {
+  pageTableRef: '',
+  totalPages: 0,
+  pagesUploaded: 0,
+  pagesSkipped: 0,
+}
+let stats: { blockCount: number; txCount: number; dbSizeBytes: number }
+
+if (args.perBlock) {
+  console.log(`\n== per-block mode (${args.perBlock} blocks) ==`)
+  const blockLimit = args.perBlock
+
+  // Stream blocks one at a time from each target file
+  let processed = 0
+  targetLoop: for (const t of uploadable) {
+    const rl = createInterface({
+      input: createReadStream(t.blocksPath, 'utf8'),
+      crlfDelay: Infinity,
+    })
+
+    for await (const line of rl) {
+      if (processed >= blockLimit) {
+        rl.close()
+        break targetLoop
+      }
+      if (!line.trim()) continue
+
+      const t0 = performance.now()
+      const result = await indexer.addSingleBlock(bee, line, batchId)
+      const t1 = performance.now()
+
+      if (result.skipped) {
+        console.log(`Block ${result.blockNumber}: skipped (already exists)`)
+        totals.blocksSkipped++
+        processed++
+        continue
+      }
+
+      totals.blocksAdded++
+      totals.txHashesAdded += result.txHashesAdded
+
+      // Sync after each block
+      syncResult = await indexer.sync(bee, { batchId })
+      const t2 = performance.now()
+
+      console.log(
+        `Block ${result.blockNumber}: upload=${(t1 - t0).toFixed(0)}ms sync=${(t2 - t1).toFixed(0)}ms total=${(t2 - t0).toFixed(0)}ms`,
+      )
+
+      processed++
+    }
+  }
+
+  // Final stats
+  stats = indexer.getStats()
+  console.log(
+    `\n       ${stats.blockCount} blocks, ${stats.txCount} txs, ${(stats.dbSizeBytes / 1024 / 1024).toFixed(2)} MB`,
+  )
+} else {
+  // Existing bulk flow
+  // Process each era file
+  for (const t of uploadable) {
+    console.log(header(t))
+    const started = Date.now()
+
+    const res = await indexer.addBlocksFromNdjson(bee, t.blocksPath, {
+      batchId,
+      blockNumber: args.blockNumber,
+      onProgress: (msg) => console.log(`       ${msg}`),
+    })
+
+    totals.blocksAdded += res.blocksAdded
+    totals.blocksSkipped += res.blocksSkipped
+    totals.txHashesAdded += res.txHashesAdded
+    const skipMsg = res.blocksSkipped > 0 ? `, skipped ${res.blocksSkipped}` : ''
+    console.log(
+      `       added ${res.blocksAdded} blocks${skipMsg}, ${res.txHashesAdded} txs in ${Date.now() - started} ms`,
+    )
+  }
+
+  // Compact database before sync
+  console.log('\n== compacting database ==')
+  indexer.vacuum()
+  stats = indexer.getStats()
+  console.log(
+    `       ${stats.blockCount} blocks, ${stats.txCount} txs, ${(stats.dbSizeBytes / 1024 / 1024).toFixed(2)} MB`,
+  )
+
+  // Sync to Swarm with incremental page uploads
+  console.log('\n== syncing to swarm ==')
+  const syncStarted = Date.now()
+  syncResult = await indexer.sync(bee, {
+    batchId,
+    onProgress: (msg) => console.log(`       ${msg}`),
+  })
+
+  console.log(`       synced in ${Date.now() - syncStarted} ms`)
+  console.log(
+    `       pages: ${syncResult.pagesUploaded} uploaded, ${syncResult.pagesSkipped} skipped`,
+  )
+  console.log(`       page table ref: ${syncResult.pageTableRef}`)
+}
+
+// Save page tracking state for next run
+await indexer.saveState(statePath)
+
+// Write metadata file
+const firstEra = uploadable[0].era
+const lastEra = uploadable[uploadable.length - 1].era
+const rangeLabel =
+  firstEra !== null && lastEra !== null
+    ? firstEra === lastEra
+      ? `${firstEra}`
+      : `${firstEra}-${lastEra}`
+    : uploadable[0].fileBase
+
+const metadataPath = resolve(DATA_DIR, `eras-${rangeLabel}.sqlite-index.json`)
+const metadata = {
+  type: 'sqlite-index',
+  eras: uploadable.map((t) => t.era).filter((e): e is number => e !== null),
+  files: uploadable.map((t) => t.fileBase),
+  uploadedAt: new Date().toISOString(),
+  beeUrl,
+  batchId,
+  pageTableRef: syncResult.pageTableRef,
+  totalPages: syncResult.totalPages,
+  pagesUploaded: syncResult.pagesUploaded,
+  blocksIndexed: totals.blocksAdded,
+  blocksSkipped: totals.blocksSkipped,
+  txHashesIndexed: totals.txHashesAdded,
+  dbSizeBytes: stats.dbSizeBytes,
+}
+await writeFile(metadataPath, JSON.stringify(metadata, null, 2))
+
+const elapsed = Date.now() - runStarted
+
+console.log(`\n== summary ==`)
+const summarySkipMsg = totals.blocksSkipped > 0 ? `, ${totals.blocksSkipped} skipped` : ''
+console.log(
+  `       indexed ${totals.blocksAdded} blocks${summarySkipMsg}, ${totals.txHashesAdded} txs in ${elapsed} ms`,
+)
+console.log(`       page table: ${syncResult.pageTableRef}`)
+console.log(`       metadata:   ${metadataPath}`)
+
+indexer.close()

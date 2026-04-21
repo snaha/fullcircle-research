@@ -16,6 +16,7 @@
     "upload": "tsx src/upload.ts",
     "upload-pot": "tsx src/upload-pot.ts",
     "state-extract": "tsx src/state-extract.ts",
+    "upload-sqlite": "tsx src/upload-sqlite.ts",
     "check": "tsc --noEmit",
     "typecheck": "pnpm check",
     "build": "tsc",
@@ -38,6 +39,7 @@
     "@ethersphere/bee-js": "^8.0.0",
     "@noble/curves": "^1.9.1",
     "@noble/hashes": "^1.4.0",
+    "better-sqlite3": "^11.9.1",
     "mantaray-js": "^1.0.3",
     "snappyjs": "^0.7.0",
     "ws": "^8.18.0"
@@ -45,6 +47,7 @@
   "devDependencies": {
     "@types/ws": "^8.5.14",
     "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^7.6.13",
     "eslint": "^10.2.1",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.5.0",
