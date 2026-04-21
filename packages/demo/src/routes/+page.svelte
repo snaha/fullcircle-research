@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SUPPORTED_METHODS, UNSUPPORTED_METHODS } from '@fullcircle/rpc/methods'
   import { onMount } from 'svelte'
 
   import { DEFAULT_RPC_URL, makeClient } from '$lib/client'
@@ -146,6 +147,32 @@
       </details>
     {/if}
   </section>
+
+  <section class="card">
+    <h2>Methods</h2>
+    <p class="muted">
+      Archive replay covers the historical block and chain-metadata slice of the JSON-RPC surface.
+      State, transactions, logs, and signing aren't supported.
+    </p>
+    <div class="methods">
+      <div>
+        <h3 class="methods-heading supported">Supported ({SUPPORTED_METHODS.length})</h3>
+        <ul class="methods-list">
+          {#each SUPPORTED_METHODS as method (method)}
+            <li class="mono">{method}</li>
+          {/each}
+        </ul>
+      </div>
+      <div>
+        <h3 class="methods-heading unsupported">Not supported ({UNSUPPORTED_METHODS.length})</h3>
+        <ul class="methods-list">
+          {#each UNSUPPORTED_METHODS as method (method)}
+            <li class="mono">{method}</li>
+          {/each}
+        </ul>
+      </div>
+    </div>
+  </section>
 </main>
 
 <style>
@@ -257,5 +284,36 @@
     font-family: var(--mono);
     font-size: 0.8rem;
     max-height: 420px;
+  }
+
+  .methods {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1.25rem;
+  }
+
+  .methods-heading {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .methods-heading.supported {
+    color: #15803d;
+  }
+
+  .methods-heading.unsupported {
+    color: #b91c1c;
+  }
+
+  .methods-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.85rem;
   }
 </style>
