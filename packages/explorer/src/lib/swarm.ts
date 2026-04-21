@@ -1,5 +1,11 @@
-// Browser client for fetching block bundles from a Bee gateway through a
-// Mantaray manifest uploaded by @fullcircle/era.
+// Source-agnostic block / meta fetchers. Dispatches between:
+//   - Mantaray manifest: `/bzz/{manifestRef}/{index}/{key}` for bundles,
+//     `/bzz/{manifestRef}/meta` for the range summary.
+//   - POT: three KVS lookups (byNumber / byHash / byTx) to resolve the
+//     bundle's 32-byte Swarm reference, then `/bytes/{ref}`; meta is a
+//     plain JSON chunk at `/bytes/{metaRef}`.
+//
+// Both paths share the same decode step (`@fullcircle/era/bundle`).
 
 import {
   computeBlockReward,
@@ -13,6 +19,8 @@ import {
   type DecodedHeader,
   type DecodedReceipt,
 } from '@fullcircle/era/bundle'
+import { getBundleRef, type PotIndex } from './pot'
+import { settings } from './settings.svelte'
 
 export interface FetchedBlock {
   header: DecodedHeader
@@ -23,55 +31,64 @@ export interface FetchedBlock {
   hash: string // keccak256(rawHeader) — canonical block hash
 }
 
-export interface FetchOptions {
-  beeUrl: string
-  manifestRef: string // 32-byte hex, no 0x prefix
-}
-
-// Index prefixes — must match packages/era/src/swarm.ts.
 export type Index = 'number' | 'hash' | 'tx'
 
-export interface ManifestMeta {
-  firstBlock: string // decimal string; '0' if the manifest has no /meta yet
+export interface SourceMeta {
+  firstBlock: string
   lastBlock: string
   blockCount: string
   txCount: string
 }
 
+const POT_INDEX_MAP: Record<Index, PotIndex> = {
+  number: 'byNumber',
+  hash: 'byHash',
+  tx: 'byTx',
+}
+
 /**
- * Fetch the `/meta` bundle written by `writeBlockRangeMeta` in @fullcircle/era.
- * Older manifests don't have it — treat as an empty range (0..0) rather than
- * erroring so the UI can still render.
+ * Fetch the range summary for the currently-selected source. Returns an
+ * all-zero `SourceMeta` if the summary is missing (older manifest, POT set
+ * without meta) so the UI can still render.
  */
-export async function fetchManifestMeta(opts: FetchOptions): Promise<ManifestMeta> {
-  const empty: ManifestMeta = {
+export async function fetchMeta(): Promise<SourceMeta> {
+  const empty: SourceMeta = {
     firstBlock: '0',
     lastBlock: '0',
     blockCount: '0',
     txCount: '0',
   }
   try {
-    const res = await fetch(`${opts.beeUrl}/bzz/${opts.manifestRef}/meta`)
-    if (!res.ok) return empty
-    const data: unknown = await res.json()
-    if (!data || typeof data !== 'object') return empty
-    const { firstBlock, lastBlock, blockCount, txCount } = data as Record<string, unknown>
-    return {
-      firstBlock: typeof firstBlock === 'string' ? firstBlock : '0',
-      lastBlock: typeof lastBlock === 'string' ? lastBlock : '0',
-      blockCount: typeof blockCount === 'string' ? blockCount : '0',
-      txCount: typeof txCount === 'string' ? txCount : '0',
+    if (settings.source === 'manifest') {
+      const res = await fetch(`${settings.beeUrl}/bzz/${settings.manifestRef}/meta`)
+      if (!res.ok) return empty
+      return parseMeta(await res.json(), empty)
     }
+    if (!/^[0-9a-f]{64}$/.test(settings.potMeta)) return empty
+    const res = await fetch(`${settings.beeUrl}/bytes/${settings.potMeta}`)
+    if (!res.ok) return empty
+    return parseMeta(await res.json(), empty)
   } catch {
     return empty
   }
 }
 
+function parseMeta(data: unknown, empty: SourceMeta): SourceMeta {
+  if (!data || typeof data !== 'object') return empty
+  const { firstBlock, lastBlock, blockCount, txCount } = data as Record<string, unknown>
+  return {
+    firstBlock: typeof firstBlock === 'string' ? firstBlock : empty.firstBlock,
+    lastBlock: typeof lastBlock === 'string' ? lastBlock : empty.lastBlock,
+    blockCount: typeof blockCount === 'string' ? blockCount : empty.blockCount,
+    txCount: typeof txCount === 'string' ? txCount : empty.txCount,
+  }
+}
+
 /**
- * True if the manifest's indexed block count matches its declared range —
- * i.e., no gaps. Returns null when blockCount isn't available (older meta).
+ * Returns true if the source declares a range but the indexed count doesn't
+ * cover `[firstBlock, lastBlock]`. Null when the count isn't available.
  */
-export function hasGaps(meta: ManifestMeta): boolean | null {
+export function hasGaps(meta: SourceMeta): boolean | null {
   if (meta.blockCount === '0') return null
   try {
     const first = BigInt(meta.firstBlock)
@@ -83,30 +100,11 @@ export function hasGaps(meta: ManifestMeta): boolean | null {
   }
 }
 
-export async function fetchBundleByPath(path: string, opts: FetchOptions): Promise<Uint8Array> {
-  const url = `${opts.beeUrl}/bzz/${opts.manifestRef}/${path}`
-  const res = await fetch(url)
-  if (!res.ok) {
-    if (res.status === 404) throw new Error(`not found: ${path}`)
-    throw new Error(`bee ${res.status} ${res.statusText}: ${path}`)
-  }
-  const buf = await res.arrayBuffer()
-  return new Uint8Array(buf)
-}
-
-export async function fetchBlock(
-  index: Index,
-  key: string,
-  opts: FetchOptions,
-): Promise<FetchedBlock> {
-  const normalizedKey =
-    index === 'number'
-      ? key
-      : key.toLowerCase().startsWith('0x')
-        ? key.toLowerCase()
-        : `0x${key.toLowerCase()}`
-
-  const bytes = await fetchBundleByPath(`${index}/${normalizedKey}`, opts)
+export async function fetchBlock(index: Index, key: string): Promise<FetchedBlock> {
+  const bytes =
+    settings.source === 'manifest'
+      ? await fetchBundleViaManifest(index, key)
+      : await fetchBundleViaPot(index, key)
   const bundle = decodeBlockBundle(bytes)
   const header = decodeBlockHeader(bundle.rawHeader)
   const body = decodeBlockBody(bundle.rawBody)
@@ -118,5 +116,74 @@ export async function fetchBlock(
     reward: computeBlockReward(header, body, receipts),
     totalDifficulty: bundle.totalDifficulty,
     hash: hashBlockHeader(bundle.rawHeader),
+  }
+}
+
+async function fetchBundleViaManifest(index: Index, key: string): Promise<Uint8Array> {
+  const normalized =
+    index === 'number'
+      ? key
+      : key.toLowerCase().startsWith('0x')
+        ? key.toLowerCase()
+        : `0x${key.toLowerCase()}`
+  const url = `${settings.beeUrl}/bzz/${settings.manifestRef}/${index}/${normalized}`
+  const res = await fetch(url)
+  if (!res.ok) {
+    if (res.status === 404) throw new Error(`not found: ${index}/${normalized}`)
+    throw new Error(`bee ${res.status} ${res.statusText}: ${index}/${normalized}`)
+  }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+async function fetchBundleViaPot(index: Index, key: string): Promise<Uint8Array> {
+  const ref = await getBundleRef(POT_INDEX_MAP[index], key, {
+    beeUrl: settings.beeUrl,
+    refs: {
+      byNumber: settings.potByNumber,
+      byHash: settings.potByHash,
+      byTx: settings.potByTx,
+    },
+  })
+  if (!ref) throw new Error(`not found in POT ${index}: ${key}`)
+  const res = await fetch(`${settings.beeUrl}/bytes/${ref}`)
+  if (!res.ok) {
+    throw new Error(`bee ${res.status} ${res.statusText}: /bytes/${ref}`)
+  }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+/**
+ * Cheap existence probe for the lookup page. For manifest we range-GET the
+ * bundle (any non-404 is good enough); for POT we do a `getRaw` on the
+ * appropriate KVS and check for a non-null reference.
+ */
+export async function probeIndex(index: Index, key: string): Promise<boolean> {
+  try {
+    if (settings.source === 'manifest') {
+      const normalized =
+        index === 'number'
+          ? key
+          : key.toLowerCase().startsWith('0x')
+            ? key.toLowerCase()
+            : `0x${key.toLowerCase()}`
+      const res = await fetch(
+        `${settings.beeUrl}/bzz/${settings.manifestRef}/${index}/${normalized}`,
+        {
+          headers: { Range: 'bytes=0-0' },
+        },
+      )
+      return res.status !== 404
+    }
+    const ref = await getBundleRef(POT_INDEX_MAP[index], key, {
+      beeUrl: settings.beeUrl,
+      refs: {
+        byNumber: settings.potByNumber,
+        byHash: settings.potByHash,
+        byTx: settings.potByTx,
+      },
+    })
+    return ref !== null
+  } catch {
+    return false
   }
 }

@@ -1,8 +1,8 @@
 // CLI entry point for uploading block data to Swarm via POT JS indexes.
 //
 // Mirror of ./upload.ts, but with POT-backed indexing instead of Mantaray.
-// Produces `eras-<range>.pot.json` with the three root references
-// (byNumber / byHash / byTx) and upload stats.
+// Produces `eras-<range>.pot.json` with the four root references
+// (byNumber / byHash / byTx / meta) and upload stats.
 //
 // Usage:
 //   pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [range]
@@ -15,7 +15,14 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
 import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
-import { addBlocksToPot, openPotIndexes, savePotIndexes, type PotIndexRefs } from './swarm-pot.js'
+import {
+  addBlocksToPot,
+  getPotBlockRange,
+  openPotIndexes,
+  savePotIndexes,
+  writePotBlockRangeMeta,
+  type PotIndexRefs,
+} from './swarm-pot.js'
 
 // ---------- Parse arguments ----------
 
@@ -46,6 +53,8 @@ interface PotMetaFile {
   batchId: string
   extendedFrom: string | null
   indexes: PotIndexRefs
+  firstBlock: string | null
+  lastBlock: string | null
   blocksUploaded: number
   txHashesIndexed: number
 }
@@ -56,7 +65,35 @@ async function loadExistingRefs(path: string): Promise<PotIndexRefs> {
   if (!meta.indexes?.byNumber || !meta.indexes?.byHash || !meta.indexes?.byTx) {
     throw new Error(`${path}: missing indexes.{byNumber,byHash,byTx}`)
   }
-  return meta.indexes
+  return { ...meta.indexes, meta: meta.indexes.meta ?? null }
+}
+
+// ---------- Duration helpers ----------
+
+function formatDuration(ms: number): string {
+  const h = Math.floor(ms / 3_600_000)
+  const m = Math.floor((ms % 3_600_000) / 60_000)
+  const s = Math.floor((ms % 60_000) / 1_000)
+  const msPart = ms % 1_000
+
+  let pretty: string
+  if (h > 0) {
+    pretty = `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s ${String(msPart).padStart(3, '0')}ms`
+  } else if (m > 0) {
+    pretty = `${m}m ${String(s).padStart(2, '0')}s ${String(msPart).padStart(3, '0')}ms`
+  } else if (s > 0) {
+    pretty = `${s}s ${String(msPart).padStart(3, '0')}ms`
+  } else {
+    pretty = `${msPart}ms`
+  }
+  return `${ms} ms (${pretty})`
+}
+
+async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const started = Date.now()
+  const result = await fn()
+  console.log(`⏱  ${label}: ${formatDuration(Date.now() - started)}`)
+  return result
 }
 
 // ---------- Main ----------
@@ -97,12 +134,22 @@ if (uploadable.length === 0) {
 
 const existingRefs = args.refsPath ? await loadExistingRefs(args.refsPath) : undefined
 
-const indexes = await openPotIndexes({
-  beeUrl,
-  batchId,
-  existingRefs,
-  onProgress: (msg) => console.log(msg),
-})
+const indexes = await timed('open indexes', () =>
+  openPotIndexes({
+    bee,
+    beeUrl,
+    batchId,
+    existingRefs,
+    onProgress: (msg) => console.log(msg),
+  }),
+)
+
+const rangeBefore = getPotBlockRange(indexes)
+if (rangeBefore) {
+  console.log(`before: firstBlock=${rangeBefore.firstBlock} lastBlock=${rangeBefore.lastBlock}`)
+} else {
+  console.log('before: empty indexes')
+}
 
 const totals = { blocksUploaded: 0, txHashesIndexed: 0 }
 const runStarted = Date.now()
@@ -117,15 +164,28 @@ for (const t of uploadable) {
   totals.blocksUploaded += res.blocksUploaded
   totals.txHashesIndexed += res.txHashesIndexed
   console.log(
-    `       added ${res.blocksUploaded} blocks, ${res.txHashesIndexed} txs in ${Date.now() - started} ms`,
+    `       added ${res.blocksUploaded} blocks, ${res.txHashesIndexed} txs in ${formatDuration(Date.now() - started)}`,
   )
 }
 
 console.log('\n== saving POT indexes ==')
-const indexRefs = await savePotIndexes(indexes)
+const meta = await timed('write meta', () =>
+  writePotBlockRangeMeta(bee, indexes, {
+    batchId,
+    onProgress: (msg) => console.log(`       ${msg}`),
+  }),
+)
+const indexRefs = await timed('save indexes', () => savePotIndexes(indexes))
 console.log(`       byNumber: ${indexRefs.byNumber}`)
 console.log(`       byHash:   ${indexRefs.byHash}`)
 console.log(`       byTx:     ${indexRefs.byTx}`)
+console.log(`       meta:     ${indexRefs.meta ?? '(none)'}`)
+
+if (meta) {
+  console.log(`after:  firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}`)
+} else {
+  console.log('after:  empty indexes')
+}
 
 const elapsed = Date.now() - runStarted
 
@@ -139,7 +199,7 @@ const rangeLabel =
     : uploadable[0].fileBase
 
 const metaPath = resolve(DATA_DIR, `eras-${rangeLabel}.pot.json`)
-const meta: PotMetaFile = {
+const metaFile: PotMetaFile = {
   eras: uploadable.map((t) => t.era).filter((e): e is number => e !== null),
   files: uploadable.map((t) => t.fileBase),
   uploadedAt: new Date().toISOString(),
@@ -147,12 +207,14 @@ const meta: PotMetaFile = {
   batchId,
   extendedFrom: args.refsPath ?? null,
   indexes: indexRefs,
+  firstBlock: meta?.firstBlock ?? null,
+  lastBlock: meta?.lastBlock ?? null,
   blocksUploaded: totals.blocksUploaded,
   txHashesIndexed: totals.txHashesIndexed,
 }
-await writeFile(metaPath, JSON.stringify(meta, null, 2))
+await writeFile(metaPath, JSON.stringify(metaFile, null, 2))
 
 console.log(
-  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${elapsed} ms`,
+  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${formatDuration(elapsed)}`,
 )
 console.log(`       written:  ${metaPath}`)

@@ -58,6 +58,8 @@ export default typescriptEslint.config(
       '**/package',
       '.claude/settings.local.json',
       '**/.cache',
+      // Vendored POT JS browser runtime (Go wasm_exec.js + pot-web-init.js).
+      'static/pot-web.js',
     ],
   },
 )

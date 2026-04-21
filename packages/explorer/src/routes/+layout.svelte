@@ -6,19 +6,32 @@
   import * as Dialog from '$lib/components/ui/dialog'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import { hasManifest, saveSettings, settings } from '$lib/settings.svelte'
+  import { hasSource, saveSettings, settings, sourceLabel, type Source } from '$lib/settings.svelte'
   import SearchIcon from '@lucide/svelte/icons/search'
   import SettingsIcon from '@lucide/svelte/icons/settings-2'
 
   let { children } = $props()
 
   let beeInput = $state(settings.beeUrl)
+  let sourceInput = $state<Source>(settings.source)
   let manifestInput = $state(settings.manifestRef)
-  let settingsOpen = $state(!hasManifest())
+  let potByNumberInput = $state(settings.potByNumber)
+  let potByHashInput = $state(settings.potByHash)
+  let potByTxInput = $state(settings.potByTx)
+  let potMetaInput = $state(settings.potMeta)
+  let settingsOpen = $state(!hasSource())
 
   function submitSettings(e: SubmitEvent) {
     e.preventDefault()
-    saveSettings(beeInput, manifestInput)
+    saveSettings({
+      beeUrl: beeInput,
+      source: sourceInput,
+      manifestRef: manifestInput,
+      potByNumber: potByNumberInput,
+      potByHash: potByHashInput,
+      potByTx: potByTxInput,
+      potMeta: potMetaInput,
+    })
     settingsOpen = false
   }
 
@@ -78,7 +91,7 @@
       </Button>
     </div>
 
-    {#if hasManifest()}
+    {#if hasSource()}
       <div class="border-t">
         <div
           class="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-5 py-1.5 text-xs text-muted-foreground"
@@ -87,7 +100,7 @@
             bee · {settings.beeUrl.replace(/^https?:\/\//, '')}
           </Badge>
           <Badge variant="secondary" class="font-mono">
-            manifest · {settings.manifestRef.slice(0, 10)}…{settings.manifestRef.slice(-6)}
+            {sourceLabel()}
           </Badge>
         </div>
       </div>
@@ -95,12 +108,12 @@
   </header>
 
   <Dialog.Root bind:open={settingsOpen}>
-    <Dialog.Content>
+    <Dialog.Content class="max-h-[90vh] overflow-y-auto">
       <form onsubmit={submitSettings} class="flex flex-col gap-4">
         <Dialog.Header>
           <Dialog.Title>Source</Dialog.Title>
           <Dialog.Description>
-            Point the explorer at a Bee gateway and a Mantaray manifest reference.
+            Point the explorer at a Bee gateway and either a Mantaray manifest or a POT index.
           </Dialog.Description>
         </Dialog.Header>
 
@@ -115,16 +128,102 @@
         </div>
 
         <div class="flex flex-col gap-2">
-          <Label for="manifest-ref">Manifest reference</Label>
-          <Input
-            id="manifest-ref"
-            type="text"
-            bind:value={manifestInput}
-            placeholder="64-character hex"
-            spellcheck="false"
-            class="font-mono"
-          />
+          <Label>Index type</Label>
+          <div class="flex gap-4 text-sm">
+            <label class="flex items-center gap-2">
+              <input
+                type="radio"
+                name="source"
+                value="manifest"
+                checked={sourceInput === 'manifest'}
+                onchange={() => (sourceInput = 'manifest')}
+              />
+              <span>Mantaray manifest</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input
+                type="radio"
+                name="source"
+                value="pot"
+                checked={sourceInput === 'pot'}
+                onchange={() => (sourceInput = 'pot')}
+              />
+              <span>POT indexes</span>
+            </label>
+          </div>
         </div>
+
+        {#if sourceInput === 'manifest'}
+          <div class="flex flex-col gap-2">
+            <Label for="manifest-ref">Manifest reference</Label>
+            <Input
+              id="manifest-ref"
+              type="text"
+              bind:value={manifestInput}
+              placeholder="64-character hex"
+              spellcheck="false"
+              class="font-mono"
+            />
+          </div>
+        {:else}
+          <div class="flex flex-col gap-3 rounded-md border p-3">
+            <p class="text-xs text-muted-foreground">
+              Paste the four refs printed by <code class="font-mono">pnpm era:upload-pot</code> (or
+              read from <code class="font-mono">eras-*.pot.json</code>).
+            </p>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-by-number">byNumber</Label>
+              <Input
+                id="pot-by-number"
+                type="text"
+                bind:value={potByNumberInput}
+                placeholder="64-character hex"
+                spellcheck="false"
+                class="font-mono"
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-by-hash">byHash</Label>
+              <Input
+                id="pot-by-hash"
+                type="text"
+                bind:value={potByHashInput}
+                placeholder="64-character hex"
+                spellcheck="false"
+                class="font-mono"
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-by-tx"
+                >byTx <span class="text-muted-foreground">(optional)</span></Label
+              >
+              <Input
+                id="pot-by-tx"
+                type="text"
+                bind:value={potByTxInput}
+                placeholder="64-character hex (all-zeros when no tx indexed)"
+                spellcheck="false"
+                class="font-mono"
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-meta"
+                >meta <span class="text-muted-foreground">(optional)</span></Label
+              >
+              <Input
+                id="pot-meta"
+                type="text"
+                bind:value={potMetaInput}
+                placeholder="64-character hex"
+                spellcheck="false"
+                class="font-mono"
+              />
+            </div>
+            <p class="text-xs text-muted-foreground">
+              First load of a POT session downloads ~15 MB of WASM.
+            </p>
+          </div>
+        {/if}
 
         <Dialog.Footer>
           <Button type="button" variant="ghost" onclick={() => (settingsOpen = false)}>

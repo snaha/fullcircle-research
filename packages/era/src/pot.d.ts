@@ -29,7 +29,6 @@ interface PotGlobal {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var pot: PotGlobal
 }
 

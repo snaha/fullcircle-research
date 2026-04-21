@@ -4,6 +4,10 @@ node_modules
 /.svelte-kit
 /package
 
+# Vendored POT JS browser runtime (Go wasm_exec.js + pot-web-init.js).
+static/pot-web.js
+static/pot.wasm
+
 .env
 .env.*
 !.env.example

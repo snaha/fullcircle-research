@@ -20,6 +20,12 @@
 // with bee.uploadData() and their reference is stored as the POT value. POT
 // values are capped at 100 KiB by default, which is smaller than some block
 // bodies, so we do NOT store bundles inside POT.
+//
+// A fourth reference — `meta` — is a Swarm data chunk carrying a small JSON
+// summary (firstBlock / lastBlock / blockCount / txCount) of what's indexed.
+// Mantaray derives this by walking the tree; POT KVSs can't be iterated, so
+// we track counters during `addBlocksToPot` and rely on the caller to load
+// previous stats when extending.
 
 import { createRequire } from 'node:module'
 import { webcrypto } from 'node:crypto'
@@ -49,6 +55,12 @@ function loadPotRuntime(): Promise<void> {
   if (!(globalThis as { crypto?: unknown }).crypto) {
     ;(globalThis as { crypto?: unknown }).crypto = webcrypto
   }
+  // pot-node.js reads `global.potVerbosity` at init and defaults to a chatty
+  // level that prints slot/loader lines for every KVS operation. Mute it
+  // before require so the CLI output stays useful; override with
+  // FULLCIRCLE_POT_VERBOSITY when debugging the runtime.
+  const verbosity = process.env.FULLCIRCLE_POT_VERBOSITY
+  ;(globalThis as { potVerbosity?: number }).potVerbosity = verbosity ? Number(verbosity) : 0
   const here = dirname(fileURLToPath(import.meta.url))
   const potNodePath = resolve(here, '../vendor/pot/pot-node.js')
   const req = createRequire(import.meta.url)
@@ -69,16 +81,37 @@ export interface BlockRecord {
   rawReceipts: string
 }
 
+export interface PotMeta {
+  firstBlock: string
+  lastBlock: string
+  blockCount: string
+  txCount: string
+}
+
+interface PotStats {
+  firstBlock: bigint | null
+  lastBlock: bigint | null
+  blockCount: bigint
+  txCount: bigint
+}
+
 export interface PotIndexes {
   byNumber: PotKvs
   byHash: PotKvs
   byTx: PotKvs
+  // Mutable counters, updated by addBlocksToPot and serialised by
+  // writePotBlockRangeMeta. Seeded from an existing meta chunk when extending.
+  stats: PotStats
+  // Swarm reference of the last-written meta chunk. Set by
+  // writePotBlockRangeMeta; read by savePotIndexes.
+  metaRef: string | null
 }
 
 export interface PotIndexRefs {
   byNumber: string
   byHash: string
   byTx: string
+  meta: string | null
 }
 
 export interface AddBlocksResult {
@@ -87,7 +120,8 @@ export interface AddBlocksResult {
 }
 
 export interface OpenPotIndexesOptions {
-  beeUrl?: string // default: http://localhost:1633
+  bee: Bee // for meta chunk download when extending
+  beeUrl?: string // default: http://localhost:1633 — passed to POT runtime
   batchId: string // required postage batch ID
   existingRefs?: PotIndexRefs // extend previously-saved indexes
   onProgress?: (msg: string) => void
@@ -127,22 +161,30 @@ export async function* readBlocksNdjson(path: string): AsyncGenerator<BlockRecor
  * Open three POT KVSs — either fresh, or by loading existing references for
  * in-place extension. Mirrors `openManifest` in ./swarm.ts.
  *
- * Returns handles to use with `addBlocksToPot` and `savePotIndexes`.
+ * When extending, also fetches the previous meta chunk (if any) and seeds
+ * the running stats so `writePotBlockRangeMeta` emits the cumulative totals.
  */
 export async function openPotIndexes(options: OpenPotIndexesOptions): Promise<PotIndexes> {
   await loadPotRuntime()
   const log = options.onProgress ?? console.log
   const beeUrl = options.beeUrl ?? 'http://localhost:1633'
-  const { batchId, existingRefs } = options
+  const { bee, batchId, existingRefs } = options
 
   if (existingRefs) {
     log(`loading existing POT indexes...`)
-    const [byNumber, byHash, byTx] = await Promise.all([
+    const [byNumber, byHash, byTx, stats] = await Promise.all([
       globalThis.pot.load(existingRefs.byNumber, beeUrl, batchId),
       globalThis.pot.load(existingRefs.byHash, beeUrl, batchId),
       globalThis.pot.load(existingRefs.byTx, beeUrl, batchId),
+      loadMetaStats(bee, existingRefs.meta),
     ])
-    return { byNumber, byHash, byTx }
+    return {
+      byNumber,
+      byHash,
+      byTx,
+      stats,
+      metaRef: existingRefs.meta,
+    }
   }
 
   const [byNumber, byHash, byTx] = await Promise.all([
@@ -150,12 +192,19 @@ export async function openPotIndexes(options: OpenPotIndexesOptions): Promise<Po
     globalThis.pot.new(beeUrl, batchId),
     globalThis.pot.new(beeUrl, batchId),
   ])
-  return { byNumber, byHash, byTx }
+  return {
+    byNumber,
+    byHash,
+    byTx,
+    stats: { firstBlock: null, lastBlock: null, blockCount: 0n, txCount: 0n },
+    metaRef: null,
+  }
 }
 
 /**
  * For every block in a blocks.ndjson file: upload the block bundle via
- * bee.uploadData, then record its reference in all three POT KVSs.
+ * bee.uploadData, then record its reference in all three POT KVSs and update
+ * the running stats (min/max block number, block/tx counters).
  *
  * The KVSs are NOT saved here — call `savePotIndexes` once per run.
  *
@@ -195,6 +244,13 @@ export async function addBlocksToPot(
       txHashesIndexed++
     }
 
+    const blockNumber = BigInt(block.number)
+    const stats = indexes.stats
+    if (stats.firstBlock === null || blockNumber < stats.firstBlock) stats.firstBlock = blockNumber
+    if (stats.lastBlock === null || blockNumber > stats.lastBlock) stats.lastBlock = blockNumber
+    stats.blockCount += 1n
+    stats.txCount += BigInt(block.txHashes.length)
+
     blocksUploaded++
     if (blocksUploaded % 100 === 0) {
       log(`uploaded ${blocksUploaded} blocks, ${txHashesIndexed} tx hashes indexed`)
@@ -205,7 +261,49 @@ export async function addBlocksToPot(
 }
 
 /**
- * Save all three KVSs to Swarm and return their root references.
+ * Snapshot of the running stats as a `PotMeta`. Null when nothing has been
+ * indexed yet. Pure read — does not touch Swarm.
+ */
+export function getPotBlockRange(indexes: PotIndexes): PotMeta | null {
+  const { firstBlock, lastBlock, blockCount, txCount } = indexes.stats
+  if (firstBlock === null || lastBlock === null || blockCount === 0n) return null
+  return {
+    firstBlock: firstBlock.toString(),
+    lastBlock: lastBlock.toString(),
+    blockCount: blockCount.toString(),
+    txCount: txCount.toString(),
+  }
+}
+
+/**
+ * Serialise current stats as JSON, upload the chunk to Swarm, and stash its
+ * reference on `indexes.metaRef` so `savePotIndexes` includes it in the
+ * returned `PotIndexRefs`. Mirrors `writeBlockRangeMeta` in ./swarm.ts.
+ */
+export async function writePotBlockRangeMeta(
+  bee: Bee,
+  indexes: PotIndexes,
+  options: { batchId: string; onProgress?: (msg: string) => void },
+): Promise<PotMeta | null> {
+  const log = options.onProgress ?? console.log
+  const meta = getPotBlockRange(indexes)
+  if (!meta) {
+    log('no indexed blocks — skipping meta')
+    return null
+  }
+  const metaBytes = textEncoder.encode(JSON.stringify(meta))
+  const { reference } = await bee.uploadData(options.batchId, metaBytes)
+  indexes.metaRef = reference
+  log(
+    `meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock} blockCount=${meta.blockCount} txCount=${meta.txCount}`,
+  )
+  return meta
+}
+
+/**
+ * Save all three KVSs to Swarm and return their root references together
+ * with the last-written meta reference (null if `writePotBlockRangeMeta`
+ * wasn't called this run).
  */
 export async function savePotIndexes(indexes: PotIndexes): Promise<PotIndexRefs> {
   const [byNumber, byHash, byTx] = await Promise.all([
@@ -213,5 +311,23 @@ export async function savePotIndexes(indexes: PotIndexes): Promise<PotIndexRefs>
     indexes.byHash.save(),
     indexes.byTx.save(),
   ])
-  return { byNumber, byHash, byTx }
+  return { byNumber, byHash, byTx, meta: indexes.metaRef }
+}
+
+// ---------- Internal helpers ----------
+
+const textEncoder = new TextEncoder()
+const textDecoder = new TextDecoder()
+
+async function loadMetaStats(bee: Bee, metaRef: string | null): Promise<PotStats> {
+  const empty: PotStats = { firstBlock: null, lastBlock: null, blockCount: 0n, txCount: 0n }
+  if (!metaRef) return empty
+  const bytes = new Uint8Array(await bee.downloadData(metaRef))
+  const parsed = JSON.parse(textDecoder.decode(bytes)) as PotMeta
+  return {
+    firstBlock: BigInt(parsed.firstBlock),
+    lastBlock: BigInt(parsed.lastBlock),
+    blockCount: BigInt(parsed.blockCount),
+    txCount: BigInt(parsed.txCount),
+  }
 }

@@ -3,14 +3,8 @@
   import { Button } from '$lib/components/ui/button'
   import * as Card from '$lib/components/ui/card'
   import { formatEth, relativeTime, shortHash } from '$lib/format'
-  import { hasManifest, settings } from '$lib/settings.svelte'
-  import {
-    fetchBlock,
-    fetchManifestMeta,
-    hasGaps,
-    type FetchedBlock,
-    type ManifestMeta,
-  } from '$lib/swarm'
+  import { hasSource, settings } from '$lib/settings.svelte'
+  import { fetchBlock, fetchMeta, hasGaps, type FetchedBlock, type SourceMeta } from '$lib/swarm'
   import ArrowRightIcon from '@lucide/svelte/icons/arrow-right'
 
   const LATEST_COUNT = 10
@@ -29,7 +23,7 @@
     return diff >= 0n ? Number(diff) : 0
   }
 
-  let meta = $state<ManifestMeta | null>(null)
+  let meta = $state<SourceMeta | null>(null)
   // We fetch one extra block so every displayed row has a predecessor to
   // compute the per-block interval ("N txns in Δs").
   let latest = $state<FetchedBlock[]>([])
@@ -39,9 +33,13 @@
   let rows = $derived(latest.slice(0, LATEST_COUNT))
 
   $effect(() => {
-    const beeUrl = settings.beeUrl
-    const manifestRef = settings.manifestRef
-    if (!hasManifest()) {
+    // touch reactive deps so the effect re-runs when any changes
+    void settings.beeUrl
+    void settings.source
+    void settings.manifestRef
+    void settings.potByNumber
+    void settings.potMeta
+    if (!hasSource()) {
       meta = null
       latest = []
       latestError = null
@@ -52,7 +50,7 @@
     latest = []
     latestError = null
     ;(async () => {
-      const result = await fetchManifestMeta({ beeUrl, manifestRef })
+      const result = await fetchMeta()
       if (cancelled) return
       meta = result
       latestLoading = true
@@ -65,9 +63,7 @@
         const count = Number(available < want ? available : want)
         const numbers: bigint[] = []
         for (let i = 0; i < count; i++) numbers.push(last - BigInt(i))
-        const blocks = await Promise.all(
-          numbers.map((n) => fetchBlock('number', n.toString(), { beeUrl, manifestRef })),
-        )
+        const blocks = await Promise.all(numbers.map((n) => fetchBlock('number', n.toString())))
         if (!cancelled) latest = blocks
       } catch (err) {
         if (!cancelled) latestError = err instanceof Error ? err.message : String(err)
@@ -86,7 +82,7 @@
     <h1 class="text-3xl font-semibold tracking-tight">FullCircle block explorer</h1>
     <p class="max-w-2xl text-muted-foreground">
       Browse Ethereum blocks served from Swarm. Block data is fetched directly from a Bee gateway
-      through a Mantaray manifest uploaded by <code
+      through either a Mantaray manifest or a POT index uploaded by <code
         class="rounded bg-muted px-1.5 py-0.5 font-mono text-sm">@fullcircle/era</code
       >.
     </p>
@@ -99,12 +95,31 @@
         <Card.Description>Where this explorer is reading from.</Card.Description>
       </Card.Header>
       <Card.Content>
-        {#if hasManifest()}
+        {#if hasSource()}
           <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
             <dt class="text-muted-foreground">Bee gateway</dt>
             <dd class="font-mono break-all">{settings.beeUrl}</dd>
-            <dt class="text-muted-foreground">Manifest</dt>
-            <dd class="font-mono break-all">{settings.manifestRef}</dd>
+            <dt class="text-muted-foreground">Source</dt>
+            <dd class="font-mono">
+              {#if settings.source === 'manifest'}
+                manifest
+              {:else}
+                pot
+              {/if}
+            </dd>
+            {#if settings.source === 'manifest'}
+              <dt class="text-muted-foreground">Manifest</dt>
+              <dd class="font-mono break-all">{settings.manifestRef}</dd>
+            {:else}
+              <dt class="text-muted-foreground">byNumber</dt>
+              <dd class="font-mono break-all">{settings.potByNumber}</dd>
+              <dt class="text-muted-foreground">byHash</dt>
+              <dd class="font-mono break-all">{settings.potByHash}</dd>
+              {#if /^[0-9a-f]{64}$/.test(settings.potByTx) && settings.potByTx !== '0'.repeat(64)}
+                <dt class="text-muted-foreground">byTx</dt>
+                <dd class="font-mono break-all">{settings.potByTx}</dd>
+              {/if}
+            {/if}
             <dt class="text-muted-foreground">Block range</dt>
             <dd class="font-mono">
               {#if meta}
@@ -135,12 +150,13 @@
           </dl>
         {:else}
           <p class="text-sm text-muted-foreground">
-            Open <Badge variant="outline">Settings</Badge> and paste the manifest reference printed by
-            <code class="font-mono">pnpm era:upload</code>.
+            Open <Badge variant="outline">Settings</Badge> and paste a manifest reference (from
+            <code class="font-mono">pnpm era:upload</code>) or the POT refs (from
+            <code class="font-mono">pnpm era:upload-pot</code>).
           </p>
         {/if}
       </Card.Content>
-      {#if hasManifest()}
+      {#if hasSource()}
         <Card.Footer class="flex flex-wrap gap-2">
           <Button
             href={meta ? `/block/${meta.lastBlock}` : undefined}
@@ -159,7 +175,7 @@
     <Card.Root>
       <Card.Header>
         <Card.Title>What's here</Card.Title>
-        <Card.Description>Everything the manifest currently serves.</Card.Description>
+        <Card.Description>Everything the selected source currently serves.</Card.Description>
       </Card.Header>
       <Card.Content>
         <ul class="flex flex-col gap-2 text-sm">
@@ -189,7 +205,7 @@
     </Card.Root>
   </div>
 
-  {#if hasManifest()}
+  {#if hasSource()}
     <Card.Root>
       <Card.Header class="flex flex-row items-start justify-between gap-4">
         <div class="flex flex-col gap-1.5">
