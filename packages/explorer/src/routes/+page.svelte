@@ -2,8 +2,83 @@
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import * as Card from '$lib/components/ui/card'
+  import { formatEth, relativeTime, shortHash } from '$lib/format'
   import { hasManifest, settings } from '$lib/settings.svelte'
+  import {
+    fetchBlock,
+    fetchManifestMeta,
+    hasGaps,
+    type FetchedBlock,
+    type ManifestMeta,
+  } from '$lib/swarm'
   import ArrowRightIcon from '@lucide/svelte/icons/arrow-right'
+
+  const LATEST_COUNT = 10
+
+  const numberFormatter = new Intl.NumberFormat('en-US')
+  function formatBlock(n: string | bigint): string {
+    try {
+      return numberFormatter.format(typeof n === 'bigint' ? n : BigInt(n))
+    } catch {
+      return String(n)
+    }
+  }
+
+  function intervalSecs(a: bigint, b: bigint): number {
+    const diff = a - b
+    return diff >= 0n ? Number(diff) : 0
+  }
+
+  let meta = $state<ManifestMeta | null>(null)
+  // We fetch one extra block so every displayed row has a predecessor to
+  // compute the per-block interval ("N txns in Δs").
+  let latest = $state<FetchedBlock[]>([])
+  let latestError = $state<string | null>(null)
+  let latestLoading = $state(false)
+
+  let rows = $derived(latest.slice(0, LATEST_COUNT))
+
+  $effect(() => {
+    const beeUrl = settings.beeUrl
+    const manifestRef = settings.manifestRef
+    if (!hasManifest()) {
+      meta = null
+      latest = []
+      latestError = null
+      return
+    }
+    let cancelled = false
+    meta = null
+    latest = []
+    latestError = null
+    ;(async () => {
+      const result = await fetchManifestMeta({ beeUrl, manifestRef })
+      if (cancelled) return
+      meta = result
+      latestLoading = true
+      try {
+        const last = BigInt(result.lastBlock)
+        const first = BigInt(result.firstBlock)
+        // +1 so the oldest row also has a previous block for interval calc.
+        const available = last - first + 1n
+        const want = BigInt(LATEST_COUNT + 1)
+        const count = Number(available < want ? available : want)
+        const numbers: bigint[] = []
+        for (let i = 0; i < count; i++) numbers.push(last - BigInt(i))
+        const blocks = await Promise.all(
+          numbers.map((n) => fetchBlock('number', n.toString(), { beeUrl, manifestRef })),
+        )
+        if (!cancelled) latest = blocks
+      } catch (err) {
+        if (!cancelled) latestError = err instanceof Error ? err.message : String(err)
+      } finally {
+        if (!cancelled) latestLoading = false
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  })
 </script>
 
 <main class="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-10">
@@ -30,6 +105,33 @@
             <dd class="font-mono break-all">{settings.beeUrl}</dd>
             <dt class="text-muted-foreground">Manifest</dt>
             <dd class="font-mono break-all">{settings.manifestRef}</dd>
+            <dt class="text-muted-foreground">Block range</dt>
+            <dd class="font-mono">
+              {#if meta}
+                {formatBlock(meta.firstBlock)} – {formatBlock(meta.lastBlock)}
+                {#if hasGaps(meta)}
+                  <Badge variant="destructive" class="ml-2 font-mono">gaps</Badge>
+                {/if}
+              {:else}
+                <span class="text-muted-foreground">loading…</span>
+              {/if}
+            </dd>
+            <dt class="text-muted-foreground">Blocks</dt>
+            <dd class="font-mono">
+              {#if meta}
+                {formatBlock(meta.blockCount)}
+              {:else}
+                <span class="text-muted-foreground">loading…</span>
+              {/if}
+            </dd>
+            <dt class="text-muted-foreground">Transactions</dt>
+            <dd class="font-mono">
+              {#if meta}
+                {formatBlock(meta.txCount)}
+              {:else}
+                <span class="text-muted-foreground">loading…</span>
+              {/if}
+            </dd>
           </dl>
         {:else}
           <p class="text-sm text-muted-foreground">
@@ -39,11 +141,17 @@
         {/if}
       </Card.Content>
       {#if hasManifest()}
-        <Card.Footer>
-          <Button href="/block/0" variant="secondary" size="sm">
-            Jump to block 0
+        <Card.Footer class="flex flex-wrap gap-2">
+          <Button
+            href={meta ? `/block/${meta.lastBlock}` : undefined}
+            disabled={!meta}
+            variant="secondary"
+            size="sm"
+          >
+            Jump to last block
             <ArrowRightIcon />
           </Button>
+          <Button href="/block" variant="ghost" size="sm">Browse all blocks</Button>
         </Card.Footer>
       {/if}
     </Card.Root>
@@ -80,4 +188,71 @@
       </Card.Content>
     </Card.Root>
   </div>
+
+  {#if hasManifest()}
+    <Card.Root>
+      <Card.Header class="flex flex-row items-start justify-between gap-4">
+        <div class="flex flex-col gap-1.5">
+          <Card.Title>Latest blocks</Card.Title>
+          <Card.Description>
+            {#if meta}
+              Newest {LATEST_COUNT} blocks ending at
+              <span class="font-mono">{formatBlock(meta.lastBlock)}</span>.
+            {:else}
+              Reading <code class="font-mono">/meta</code>…
+            {/if}
+          </Card.Description>
+        </div>
+        <Button href="/block" variant="ghost" size="sm">View all →</Button>
+      </Card.Header>
+      <Card.Content class="px-0">
+        {#if latestLoading && rows.length === 0}
+          <p class="px-6 text-sm text-muted-foreground">Loading blocks…</p>
+        {:else if latestError}
+          <p class="px-6 font-mono text-sm text-destructive">{latestError}</p>
+        {:else if rows.length > 0}
+          <ul class="divide-y">
+            {#each rows as block, i (block.hash)}
+              {@const h = block.header}
+              {@const prev = latest[i + 1]}
+              {@const interval = prev ? intervalSecs(h.timestamp, prev.header.timestamp) : null}
+              <li class="flex flex-wrap items-center gap-x-6 gap-y-1 px-6 py-3 hover:bg-muted/50">
+                <div class="flex w-28 flex-col">
+                  <a
+                    href="/block/{h.number}"
+                    class="font-mono text-sm text-primary underline-offset-4 hover:underline"
+                  >
+                    {h.number}
+                  </a>
+                  <span
+                    class="text-xs text-muted-foreground"
+                    title={new Date(Number(h.timestamp) * 1000).toISOString()}
+                  >
+                    {relativeTime(h.timestamp)}
+                  </span>
+                </div>
+                <div class="flex min-w-[14rem] flex-1 flex-col gap-0.5">
+                  <span class="text-sm">
+                    <span class="text-muted-foreground">Miner </span>
+                    <span class="font-mono">{shortHash(h.miner, 10, 8)}</span>
+                  </span>
+                  <span class="font-mono text-sm">
+                    {block.body.transactions.length} txns
+                    {#if interval !== null}
+                      <span class="text-muted-foreground">in {interval} secs</span>
+                    {/if}
+                  </span>
+                </div>
+                <div class="ml-auto">
+                  <Badge variant="secondary" class="font-mono"
+                    >{formatEth(block.reward.total)}</Badge
+                  >
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </Card.Content>
+    </Card.Root>
+  {/if}
 </main>

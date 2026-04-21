@@ -31,6 +31,58 @@ export interface FetchOptions {
 // Index prefixes — must match packages/era/src/swarm.ts.
 export type Index = 'number' | 'hash' | 'tx'
 
+export interface ManifestMeta {
+  firstBlock: string // decimal string; '0' if the manifest has no /meta yet
+  lastBlock: string
+  blockCount: string
+  txCount: string
+}
+
+/**
+ * Fetch the `/meta` bundle written by `writeBlockRangeMeta` in @fullcircle/era.
+ * Older manifests don't have it — treat as an empty range (0..0) rather than
+ * erroring so the UI can still render.
+ */
+export async function fetchManifestMeta(opts: FetchOptions): Promise<ManifestMeta> {
+  const empty: ManifestMeta = {
+    firstBlock: '0',
+    lastBlock: '0',
+    blockCount: '0',
+    txCount: '0',
+  }
+  try {
+    const res = await fetch(`${opts.beeUrl}/bzz/${opts.manifestRef}/meta`)
+    if (!res.ok) return empty
+    const data: unknown = await res.json()
+    if (!data || typeof data !== 'object') return empty
+    const { firstBlock, lastBlock, blockCount, txCount } = data as Record<string, unknown>
+    return {
+      firstBlock: typeof firstBlock === 'string' ? firstBlock : '0',
+      lastBlock: typeof lastBlock === 'string' ? lastBlock : '0',
+      blockCount: typeof blockCount === 'string' ? blockCount : '0',
+      txCount: typeof txCount === 'string' ? txCount : '0',
+    }
+  } catch {
+    return empty
+  }
+}
+
+/**
+ * True if the manifest's indexed block count matches its declared range —
+ * i.e., no gaps. Returns null when blockCount isn't available (older meta).
+ */
+export function hasGaps(meta: ManifestMeta): boolean | null {
+  if (meta.blockCount === '0') return null
+  try {
+    const first = BigInt(meta.firstBlock)
+    const last = BigInt(meta.lastBlock)
+    const count = BigInt(meta.blockCount)
+    return count !== last - first + 1n
+  } catch {
+    return null
+  }
+}
+
 export async function fetchBundleByPath(path: string, opts: FetchOptions): Promise<Uint8Array> {
   const url = `${opts.beeUrl}/bzz/${opts.manifestRef}/${path}`
   const res = await fetch(url)

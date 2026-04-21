@@ -41,6 +41,13 @@ export interface AddBlocksResult {
   txHashesIndexed: number
 }
 
+export interface ManifestMeta {
+  firstBlock: string
+  lastBlock: string
+  blockCount: string
+  txCount: string
+}
+
 export interface UploadOptions {
   beeUrl?: string // default: http://localhost:1633
   batchId: string // required postage batch ID
@@ -167,6 +174,65 @@ export async function addBlocksToManifest(
 }
 
 /**
+ * Compute the block range from the manifest's own `number/<n>` forks without
+ * mutating or uploading anything. Returns null if the manifest has no blocks.
+ */
+export function getManifestBlockRange(manifest: MantarayNodeInstance): ManifestMeta | null {
+  const { numbers, txCount } = scanManifestTree(manifest)
+  if (numbers.length === 0) return null
+  let min = numbers[0]
+  let max = numbers[0]
+  for (const n of numbers) {
+    if (n < min) min = n
+    if (n > max) max = n
+  }
+  return {
+    firstBlock: min.toString(),
+    lastBlock: max.toString(),
+    blockCount: numbers.length.toString(),
+    txCount: txCount.toString(),
+  }
+}
+
+/**
+ * Compute the block range from the manifest's own `number/<n>` forks and
+ * upsert it at path `meta` as a small JSON chunk. Deriving the range from the
+ * manifest tree (rather than tracking it during `addBlocksToManifest`) makes
+ * `/meta` a pure function of the indexed blocks — it cannot drift out of sync
+ * with what the manifest actually contains.
+ */
+export async function writeBlockRangeMeta(
+  bee: Bee,
+  manifest: MantarayNodeInstance,
+  options: { batchId: string; onProgress?: (msg: string) => void },
+): Promise<ManifestMeta | null> {
+  const log = options.onProgress ?? console.log
+  const meta = getManifestBlockRange(manifest)
+  if (!meta) {
+    log('no indexed blocks — skipping meta')
+    return null
+  }
+  const metaBytes = textEncoder.encode(JSON.stringify(meta))
+  const { reference } = await bee.uploadData(options.batchId, metaBytes)
+  const ref = hexToBytes(reference) as Reference
+
+  // addFork on an existing path would collide with the old entry's metadata;
+  // remove first so the new meta chunk fully replaces any prior one.
+  try {
+    manifest.removePath(textEncoder.encode('meta'))
+  } catch {
+    // no prior meta fork — fine
+  }
+  manifest.addFork(textEncoder.encode('meta'), ref, {
+    'Content-Type': 'application/json',
+  })
+  log(
+    `meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock} blockCount=${meta.blockCount} txCount=${meta.txCount}`,
+  )
+  return meta
+}
+
+/**
  * Persist the in-memory manifest to Swarm. Only dirty nodes are re-uploaded,
  * so this is cheap to call once at the end of a multi-file run.
  */
@@ -204,6 +270,47 @@ export async function saveManifest(
 // ---------- Internal helpers ----------
 
 const textEncoder = new TextEncoder()
+
+const textDecoder = new TextDecoder()
+const NUMBER_PREFIX = 'number/'
+const TX_PREFIX = 'tx/'
+
+interface ManifestScan {
+  numbers: bigint[]
+  txCount: bigint
+}
+
+/**
+ * Walk every path in the manifest once and collect block numbers from
+ * `number/<n>` forks plus the count of `tx/<hash>` forks. Assumes the tree is
+ * already hydrated (openManifest does this via loadAllNodes).
+ */
+function scanManifestTree(root: MantarayNodeInstance): ManifestScan {
+  const numbers: bigint[] = []
+  let txCount = 0n
+
+  function walk(node: MantarayNodeInstance, accumulated: Uint8Array): void {
+    if (node.getEntry) {
+      const path = textDecoder.decode(accumulated)
+      if (path.startsWith(NUMBER_PREFIX)) {
+        const rest = path.slice(NUMBER_PREFIX.length)
+        if (/^\d+$/.test(rest)) numbers.push(BigInt(rest))
+      } else if (path.startsWith(TX_PREFIX)) {
+        txCount++
+      }
+    }
+    if (!node.forks) return
+    for (const fork of Object.values(node.forks)) {
+      const combined = new Uint8Array(accumulated.length + fork.prefix.length)
+      combined.set(accumulated)
+      combined.set(fork.prefix, accumulated.length)
+      walk(fork.node, combined)
+    }
+  }
+
+  walk(root, new Uint8Array())
+  return { numbers, txCount }
+}
 
 /**
  * Count all nodes in a MantarayNode tree.
