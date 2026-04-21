@@ -14,6 +14,7 @@
     "process": "tsx src/process.ts",
     "download-and-process": "tsx src/download-and-process.ts",
     "upload": "tsx src/upload.ts",
+    "upload-pot": "tsx src/upload-pot.ts",
     "check": "tsc --noEmit",
     "typecheck": "pnpm check",
     "build": "tsc",

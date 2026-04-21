@@ -21,6 +21,15 @@ export {
 } from './swarm.js'
 
 export {
+  openPotIndexes,
+  addBlocksToPot,
+  savePotIndexes,
+  type PotIndexes,
+  type PotIndexRefs,
+  type OpenPotIndexesOptions,
+} from './swarm-pot.js'
+
+export {
   encodeBlockBundle,
   decodeBlockBundle,
   decodeBlockHeader,
