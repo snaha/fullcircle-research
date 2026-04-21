@@ -11,6 +11,7 @@ Project issue: https://github.com/ethersphere/swarm-accelerator/issues/5
 - **[docs/RESEARCH.md](./docs/RESEARCH.md)** -- Technical research: Ethereum data structures, Swarm storage primitives, EIP-4444 history expiry, Portal Network, Era1 file format, prior art, and technical challenges
 - **[docs/PROPOSAL.md](./docs/PROPOSAL.md)** -- Implementation proposal: TypeScript tooling, architecture options, and day-by-day PoC plan
 - **[docs/INCENTIVIZATION.md](./docs/INCENTIVIZATION.md)** -- Sustainability research: funding models, endowment design, Data DAO structure, and hybrid approaches for perpetual storage
+- **[docs/SCALE.md](./docs/SCALE.md)** -- PoC vs mainnet: scale ceiling of the current in-memory Mantaray design and the LSM-backed architecture needed for the full archive (25M blocks / 3.5B txs)
 - **[README.md](./README.md)** -- How to run the erae-processing tooling
 
 ## Context
