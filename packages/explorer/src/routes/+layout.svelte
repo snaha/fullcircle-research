@@ -194,7 +194,9 @@
               />
             </div>
             <div class="flex flex-col gap-2">
-              <Label for="pot-by-tx">byTx <span class="text-muted-foreground">(optional)</span></Label>
+              <Label for="pot-by-tx"
+                >byTx <span class="text-muted-foreground">(optional)</span></Label
+              >
               <Input
                 id="pot-by-tx"
                 type="text"
@@ -205,7 +207,9 @@
               />
             </div>
             <div class="flex flex-col gap-2">
-              <Label for="pot-meta">meta <span class="text-muted-foreground">(optional)</span></Label>
+              <Label for="pot-meta"
+                >meta <span class="text-muted-foreground">(optional)</span></Label
+              >
               <Input
                 id="pot-meta"
                 type="text"

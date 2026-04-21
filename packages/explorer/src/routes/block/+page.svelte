@@ -5,13 +5,7 @@
   import * as Card from '$lib/components/ui/card'
   import { formatEth, relativeTime, shortHash } from '$lib/format'
   import { hasSource, settings } from '$lib/settings.svelte'
-  import {
-    fetchBlock,
-    fetchMeta,
-    hasGaps,
-    type FetchedBlock,
-    type SourceMeta,
-  } from '$lib/swarm'
+  import { fetchBlock, fetchMeta, hasGaps, type FetchedBlock, type SourceMeta } from '$lib/swarm'
   import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left'
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
 

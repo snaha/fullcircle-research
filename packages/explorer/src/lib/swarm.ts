@@ -121,7 +121,11 @@ export async function fetchBlock(index: Index, key: string): Promise<FetchedBloc
 
 async function fetchBundleViaManifest(index: Index, key: string): Promise<Uint8Array> {
   const normalized =
-    index === 'number' ? key : key.toLowerCase().startsWith('0x') ? key.toLowerCase() : `0x${key.toLowerCase()}`
+    index === 'number'
+      ? key
+      : key.toLowerCase().startsWith('0x')
+        ? key.toLowerCase()
+        : `0x${key.toLowerCase()}`
   const url = `${settings.beeUrl}/bzz/${settings.manifestRef}/${index}/${normalized}`
   const res = await fetch(url)
   if (!res.ok) {
@@ -157,10 +161,17 @@ export async function probeIndex(index: Index, key: string): Promise<boolean> {
   try {
     if (settings.source === 'manifest') {
       const normalized =
-        index === 'number' ? key : key.toLowerCase().startsWith('0x') ? key.toLowerCase() : `0x${key.toLowerCase()}`
-      const res = await fetch(`${settings.beeUrl}/bzz/${settings.manifestRef}/${index}/${normalized}`, {
-        headers: { Range: 'bytes=0-0' },
-      })
+        index === 'number'
+          ? key
+          : key.toLowerCase().startsWith('0x')
+            ? key.toLowerCase()
+            : `0x${key.toLowerCase()}`
+      const res = await fetch(
+        `${settings.beeUrl}/bzz/${settings.manifestRef}/${index}/${normalized}`,
+        {
+          headers: { Range: 'bytes=0-0' },
+        },
+      )
       return res.status !== 404
     }
     const ref = await getBundleRef(POT_INDEX_MAP[index], key, {

@@ -7,7 +7,12 @@ const config: KnipConfig = {
     '$env/*': ['.svelte-kit/ambient.d.ts'],
     '$lib/*': ['src/lib/*'],
   },
-  ignore: ['src/lib/components/ui/**', 'src/lib/utils.ts'],
+  ignore: [
+    'src/lib/components/ui/**',
+    'src/lib/utils.ts',
+    // Vendored POT JS browser runtime; loaded at runtime via <script src>.
+    'static/pot-web.js',
+  ],
   ignoreExportsUsedInFile: true,
 }
 
