@@ -23,6 +23,6 @@ export default typescriptEslint.config(
     },
   },
   {
-    ignores: ['**/dist', '**/build', '**/node_modules'],
+    ignores: ['**/dist', '**/build', '**/node_modules', '**/vendor'],
   },
 )
