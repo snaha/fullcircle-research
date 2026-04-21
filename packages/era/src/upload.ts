@@ -26,8 +26,15 @@ function parseArgs(argv: string[]): {
   batchId?: string
   manifestHash?: string
   target?: string
+  cacheManifest: boolean
 } {
-  const result: { beeUrl?: string; batchId?: string; manifestHash?: string; target?: string } = {}
+  const result: {
+    beeUrl?: string
+    batchId?: string
+    manifestHash?: string
+    target?: string
+    cacheManifest: boolean
+  } = { cacheManifest: true }
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
@@ -37,6 +44,8 @@ function parseArgs(argv: string[]): {
       result.batchId = argv[++i]
     } else if (arg === '--manifest' && argv[i + 1]) {
       result.manifestHash = argv[++i]
+    } else if (arg === '--no-manifest-cache') {
+      result.cacheManifest = false
     } else if (!arg.startsWith('--')) {
       result.target = arg
     }
@@ -51,12 +60,15 @@ if (!args.batchId) {
   console.error('error: --batch-id is required')
   console.error('')
   console.error('Usage:')
-  console.error('  pnpm era:upload --batch-id <postage-batch-id> [--manifest <hash>] [range]')
+  console.error(
+    '  pnpm era:upload --batch-id <postage-batch-id> [--manifest <hash>] [--no-manifest-cache] [range]',
+  )
   console.error('')
   console.error('Examples:')
   console.error('  pnpm era:upload --batch-id abc123... 0')
   console.error('  pnpm era:upload --batch-id abc123... --manifest def456... 1')
   console.error('  pnpm era:upload --bee-url http://bee.example.com --batch-id abc123... 5')
+  console.error('  pnpm era:upload --batch-id abc123... --no-manifest-cache 1')
   process.exit(1)
 }
 
@@ -115,6 +127,7 @@ const manifest = await timed('open manifest', () =>
   openManifest(bee, {
     manifestHash: args.manifestHash,
     onProgress: (msg) => console.log(msg),
+    cacheManifest: args.cacheManifest,
   }),
 )
 
@@ -155,6 +168,7 @@ const manifestReference = await timed('save manifest', () =>
   saveManifest(bee, manifest, {
     batchId,
     onProgress: (msg) => console.log(`       ${msg}`),
+    cacheManifest: args.cacheManifest,
   }),
 )
 

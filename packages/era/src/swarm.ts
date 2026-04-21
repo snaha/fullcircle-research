@@ -8,10 +8,13 @@
 //   /tx/<txHash>          -> block bundle (containing that tx)
 
 import { createReadStream } from 'node:fs'
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { Bee } from '@ethersphere/bee-js'
 import MantarayJs from 'mantaray-js'
 import { encodeBlockBundle } from './bundle.js'
+import { DATA_DIR } from './cli-shared.js'
 
 const { MantarayNode, Utils, loadAllNodes } = MantarayJs
 
@@ -96,23 +99,64 @@ export async function* readBlocksNdjson(path: string): AsyncGenerator<BlockRecor
  */
 export async function openManifest(
   bee: Bee,
-  options: { manifestHash?: string; onProgress?: (msg: string) => void },
+  options: {
+    manifestHash?: string
+    onProgress?: (msg: string) => void
+    cacheManifest?: boolean
+  },
 ): Promise<MantarayNodeInstance> {
   const log = options.onProgress ?? console.log
   const manifest = new MantarayNode()
 
   if (options.manifestHash) {
     log(`loading existing manifest ${options.manifestHash}...`)
-    const storageLoader = async (ref: Reference) => {
-      const data = await bee.downloadData(bytesToHex(ref))
-      return new Uint8Array(data)
+    const cacheEnabled = options.cacheManifest !== false
+    const rootHex = options.manifestHash.toLowerCase()
+    const existingRef = hexToBytes(rootHex) as Reference
+
+    // Fast path: a consolidated snapshot for this root exists on disk. Slurp
+    // it once, serve loadAllNodes from the resulting in-memory map.
+    const snapshot = cacheEnabled ? await readSnapshot(rootHex) : null
+    if (snapshot) {
+      log(`snapshot hit: ${snapshot.size} chunks`)
+      const snapLoader = async (ref: Reference) => {
+        const refHex = bytesToHex(ref)
+        const hit = snapshot.get(refHex)
+        // Must return a fresh copy: mantaray-js's deserialize XOR-decrypts the
+        // buffer in place. Deduped subtrees share a contentAddress, so the
+        // same ref gets loaded more than once; reusing the Map's Uint8Array
+        // would corrupt subsequent deserializations ("Wrong mantaray version").
+        if (hit) return new Uint8Array(hit)
+        const cached = await readCachedChunk(refHex)
+        if (cached) return cached
+        return new Uint8Array(await bee.downloadData(refHex))
+      }
+      await manifest.load(snapLoader, existingRef)
+      await loadAllNodes(snapLoader, manifest)
+    } else {
+      const counters = { hits: 0, misses: 0 }
+      const storageLoader = cacheEnabled
+        ? makeCachedLoader(bee, counters)
+        : async (ref: Reference) => new Uint8Array(await bee.downloadData(bytesToHex(ref)))
+      await manifest.load(storageLoader, existingRef)
+      // `load` only materializes the root node; descendants stay lazy. If we
+      // start adding forks without hydrating the tree, unloaded subtrees get
+      // dropped on save. Force-load everything before mutating.
+      await loadAllNodes(storageLoader, manifest)
+      if (cacheEnabled) {
+        log(`manifest cache: ${counters.hits} hits, ${counters.misses} misses`)
+        // First-time load from chunk cache / Swarm — consolidate into a
+        // snapshot so subsequent opens take the fast path.
+        try {
+          const chunks = await collectTreeChunks(manifest)
+          const bytes = await writeSnapshot(rootHex, chunks)
+          await pruneOldSnapshots(rootHex)
+          log(`snapshot written: ${chunks.size} chunks, ${bytes} bytes`)
+        } catch (err) {
+          log(`snapshot skipped: ${(err as Error).message}`)
+        }
+      }
     }
-    const existingRef = hexToBytes(options.manifestHash) as Reference
-    await manifest.load(storageLoader, existingRef)
-    // `load` only materializes the root node; descendants stay lazy. If we
-    // start adding forks without hydrating the tree, unloaded subtrees get
-    // dropped on save. Force-load everything before mutating.
-    await loadAllNodes(storageLoader, manifest)
   } else {
     manifest.setObfuscationKey = Utils.gen32Bytes()
   }
@@ -239,31 +283,47 @@ export async function writeBlockRangeMeta(
 export async function saveManifest(
   bee: Bee,
   manifest: MantarayNodeInstance,
-  options: { batchId: string; concurrency?: number; onProgress?: (msg: string) => void },
+  options: {
+    batchId: string
+    concurrency?: number
+    onProgress?: (msg: string) => void
+    cacheManifest?: boolean
+  },
 ): Promise<string> {
   const log = options.onProgress ?? console.log
   const totalChunks = countMantarayNodes(manifest)
   log(`uploading manifest (${totalChunks} chunks)...`)
 
   const concurrency = options.concurrency ?? 32
+  const cacheEnabled = options.cacheManifest !== false
 
-  const queuedUpload = createUploadQueue(
-    concurrency,
-    totalChunks,
-    async (data: Uint8Array) => {
-      const result = await bee.uploadData(options.batchId, data)
-      return hexToBytes(result.reference) as Reference
-    },
-    (uploaded, total) => {
-      if (uploaded % 100 === 0 || uploaded === total) {
-        log(`manifest chunks: ${uploaded}/${total}`)
-      }
-    },
-  )
+  const rawUpload = async (data: Uint8Array) => {
+    const result = await bee.uploadData(options.batchId, data)
+    return hexToBytes(result.reference) as Reference
+  }
+  const uploadFn = cacheEnabled ? makeCachedSaver(rawUpload) : rawUpload
+
+  const queuedUpload = createUploadQueue(concurrency, totalChunks, uploadFn, (uploaded, total) => {
+    if (uploaded % 100 === 0 || uploaded === total) {
+      log(`manifest chunks: ${uploaded}/${total}`)
+    }
+  })
 
   const manifestRef = await manifest.save(queuedUpload)
   const manifestReference = bytesToHex(manifestRef)
   log(`manifest saved: ${manifestReference}`)
+
+  if (cacheEnabled) {
+    try {
+      const chunks = await collectTreeChunks(manifest)
+      const bytes = await writeSnapshot(manifestReference, chunks)
+      await pruneOldSnapshots(manifestReference)
+      log(`snapshot written: ${chunks.size} chunks, ${bytes} bytes`)
+    } catch (err) {
+      log(`snapshot skipped: ${(err as Error).message}`)
+    }
+  }
+
   return manifestReference
 }
 
@@ -371,4 +431,195 @@ function bytesToHex(bytes: Uint8Array): string {
     hex += byte.toString(16).padStart(2, '0')
   }
   return hex
+}
+
+// ---------- Manifest chunk cache ----------
+//
+// Content-addressed on-disk cache for Mantaray manifest nodes. Keyed by the
+// chunk's Swarm ref (BMT hash), so entries are immutable by construction —
+// wiping data/.manifest-cache/ is always safe.
+
+const MANIFEST_CACHE_DIR = resolve(DATA_DIR, '.manifest-cache')
+
+function cachePathFor(refHex: string): string {
+  return resolve(MANIFEST_CACHE_DIR, refHex.slice(0, 2), `${refHex.slice(2)}.bin`)
+}
+
+async function readCachedChunk(refHex: string): Promise<Uint8Array | null> {
+  try {
+    const buf = await readFile(cachePathFor(refHex))
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+}
+
+let tmpCounter = 0
+
+async function writeCachedChunk(refHex: string, data: Uint8Array): Promise<void> {
+  const path = cachePathFor(refHex)
+  await mkdir(resolve(path, '..'), { recursive: true })
+  // temp + rename for atomic write so readers never see torn bytes. Tmp name
+  // must be unique per call — Mantaray's concurrent save can emit the same ref
+  // twice for deduped subtrees, which would otherwise collide on the tmp path.
+  const tmp = `${path}.${process.pid}.${tmpCounter++}.tmp`
+  try {
+    await writeFile(tmp, data)
+    await rename(tmp, path)
+  } catch (err) {
+    // Clean up the tmp file if rename failed mid-flight; ignore errors from
+    // unlink since the tmp may already be gone.
+    try {
+      await unlink(tmp)
+    } catch {
+      /* noop */
+    }
+    throw err
+  }
+}
+
+function makeCachedLoader(
+  bee: Bee,
+  counters: { hits: number; misses: number },
+): (ref: Reference) => Promise<Uint8Array> {
+  return async (ref: Reference) => {
+    const refHex = bytesToHex(ref)
+    const cached = await readCachedChunk(refHex)
+    if (cached) {
+      counters.hits++
+      return cached
+    }
+    counters.misses++
+    const data = new Uint8Array(await bee.downloadData(refHex))
+    await writeCachedChunk(refHex, data)
+    return data
+  }
+}
+
+function makeCachedSaver(
+  inner: (data: Uint8Array) => Promise<Reference>,
+): (data: Uint8Array) => Promise<Reference> {
+  return async (data: Uint8Array) => {
+    const ref = await inner(data)
+    await writeCachedChunk(bytesToHex(ref), data)
+    return ref
+  }
+}
+
+// ---------- Manifest snapshot ----------
+//
+// Single-file consolidation of every chunk belonging to one manifest tree.
+// Lets openManifest hydrate the full tree with one sequential read instead of
+// O(nodes) per-chunk file reads. Falls back to the chunk cache on miss or
+// corruption; can always be regenerated, so wiping snapshots is safe.
+
+const SNAPSHOT_MAGIC = new TextEncoder().encode('FCMS')
+const SNAPSHOT_VERSION = 1
+const SNAPSHOT_PREFIX = 'snapshot-'
+const SNAPSHOT_SUFFIX = '.bin'
+const REF_LEN = 32
+
+function snapshotPathFor(rootHex: string): string {
+  return resolve(MANIFEST_CACHE_DIR, `${SNAPSHOT_PREFIX}${rootHex}${SNAPSHOT_SUFFIX}`)
+}
+
+async function readSnapshot(rootHex: string): Promise<Map<string, Uint8Array> | null> {
+  let buf: Uint8Array
+  try {
+    const fileBuf = await readFile(snapshotPathFor(rootHex))
+    buf = new Uint8Array(fileBuf.buffer, fileBuf.byteOffset, fileBuf.byteLength)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+
+  if (buf.length < SNAPSHOT_MAGIC.length + 1 + 4) return null
+  for (let i = 0; i < SNAPSHOT_MAGIC.length; i++) {
+    if (buf[i] !== SNAPSHOT_MAGIC[i]) return null
+  }
+  let off = SNAPSHOT_MAGIC.length
+  if (buf[off++] !== SNAPSHOT_VERSION) return null
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  const count = view.getUint32(off, true)
+  off += 4
+
+  const map = new Map<string, Uint8Array>()
+  for (let i = 0; i < count; i++) {
+    if (off + REF_LEN + 4 > buf.length) return null
+    const refHex = bytesToHex(buf.subarray(off, off + REF_LEN))
+    off += REF_LEN
+    const len = view.getUint32(off, true)
+    off += 4
+    if (off + len > buf.length) return null
+    map.set(refHex, buf.subarray(off, off + len))
+    off += len
+  }
+  return map
+}
+
+async function writeSnapshot(rootHex: string, chunks: Map<string, Uint8Array>): Promise<number> {
+  let total = SNAPSHOT_MAGIC.length + 1 + 4
+  for (const data of chunks.values()) total += REF_LEN + 4 + data.length
+
+  const buf = new Uint8Array(total)
+  buf.set(SNAPSHOT_MAGIC, 0)
+  let off = SNAPSHOT_MAGIC.length
+  buf[off++] = SNAPSHOT_VERSION
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  view.setUint32(off, chunks.size, true)
+  off += 4
+  for (const [refHex, data] of chunks) {
+    buf.set(hexToBytes(refHex), off)
+    off += REF_LEN
+    view.setUint32(off, data.length, true)
+    off += 4
+    buf.set(data, off)
+    off += data.length
+  }
+
+  const path = snapshotPathFor(rootHex)
+  await mkdir(MANIFEST_CACHE_DIR, { recursive: true })
+  const tmp = `${path}.${process.pid}.tmp`
+  await writeFile(tmp, buf)
+  await rename(tmp, path)
+  return total
+}
+
+async function collectTreeChunks(root: MantarayNodeInstance): Promise<Map<string, Uint8Array>> {
+  const map = new Map<string, Uint8Array>()
+
+  async function walk(node: MantarayNodeInstance): Promise<void> {
+    const addr = node.getContentAddress
+    if (!addr) throw new Error('manifest node missing contentAddress after save')
+    const refHex = bytesToHex(addr)
+    if (!map.has(refHex)) {
+      const data = await readCachedChunk(refHex)
+      if (!data) throw new Error(`manifest chunk ${refHex} missing from cache`)
+      map.set(refHex, data)
+    }
+    if (!node.forks) return
+    for (const fork of Object.values(node.forks)) {
+      await walk(fork.node)
+    }
+  }
+
+  await walk(root)
+  return map
+}
+
+async function pruneOldSnapshots(keepRootHex: string): Promise<void> {
+  const keep = `${SNAPSHOT_PREFIX}${keepRootHex}${SNAPSHOT_SUFFIX}`
+  let entries: string[]
+  try {
+    entries = await readdir(MANIFEST_CACHE_DIR)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw err
+  }
+  for (const name of entries) {
+    if (name === keep) continue
+    if (!name.startsWith(SNAPSHOT_PREFIX) || !name.endsWith(SNAPSHOT_SUFFIX)) continue
+    await unlink(resolve(MANIFEST_CACHE_DIR, name))
+  }
 }
