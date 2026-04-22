@@ -32,7 +32,7 @@ function parseArgs(argv: string[]): {
   dbPath?: string
   target?: string
   blockNumber?: number
-  perBlock?: number
+  perBlock?: number | { start: number; end: number }
 } {
   const result: {
     beeUrl?: string
@@ -40,7 +40,7 @@ function parseArgs(argv: string[]): {
     dbPath?: string
     target?: string
     blockNumber?: number
-    perBlock?: number
+    perBlock?: number | { start: number; end: number }
   } = {}
 
   for (let i = 2; i < argv.length; i++) {
@@ -54,7 +54,13 @@ function parseArgs(argv: string[]): {
     } else if (arg === '--block' && argv[i + 1]) {
       result.blockNumber = parseInt(argv[++i], 10)
     } else if (arg === '--per-block' && argv[i + 1]) {
-      result.perBlock = parseInt(argv[++i], 10)
+      const val = argv[++i]
+      if (val.includes('..')) {
+        const [start, end] = val.split('..').map((s) => parseInt(s, 10))
+        result.perBlock = { start, end }
+      } else {
+        result.perBlock = parseInt(val, 10)
+      }
     } else if (!arg.startsWith('--')) {
       result.target = arg
     }
@@ -76,13 +82,14 @@ if (!args.batchId) {
   console.error('  --bee-url <url>     Bee node URL (default: http://localhost:1633)')
   console.error('  --db <path>         SQLite database path (default: data/index.sqlite)')
   console.error('  --block <number>    Upload only a specific block number')
-  console.error('  --per-block <n>     Process N blocks one at a time')
+  console.error('  --per-block <n|start..end>  Process blocks by position (e.g., 5 or 1000..2000)')
   console.error('')
   console.error('Examples:')
   console.error('  pnpm era:upload-sqlite --batch-id abc123... 0')
   console.error('  pnpm era:upload-sqlite --batch-id abc123... --db ./my-index.sqlite 0..6')
   console.error('  pnpm era:upload-sqlite --batch-id abc123... --block 100 0')
   console.error('  pnpm era:upload-sqlite --batch-id abc123... --per-block 5 0')
+  console.error('  pnpm era:upload-sqlite --batch-id abc123... --per-block 1000..2000 0')
   process.exit(1)
 }
 
@@ -124,11 +131,12 @@ const runStarted = Date.now()
 let stats: { blockCount: number; txCount: number; dbSizeBytes: number }
 
 if (args.perBlock) {
-  console.log(`\n== per-block mode (${args.perBlock} blocks) ==`)
-  const blockLimit = args.perBlock
+  const range = typeof args.perBlock === 'number' ? { start: 0, end: args.perBlock } : args.perBlock
+
+  console.log(`\n== per-block mode (positions ${range.start}..${range.end}) ==`)
 
   // Stream blocks one at a time from each target file
-  let processed = 0
+  let position = 0
   targetLoop: for (const t of uploadable) {
     const rl = createInterface({
       input: createReadStream(t.blocksPath, 'utf8'),
@@ -136,11 +144,17 @@ if (args.perBlock) {
     })
 
     for await (const line of rl) {
-      if (processed >= blockLimit) {
+      if (position >= range.end) {
         rl.close()
         break targetLoop
       }
       if (!line.trim()) continue
+
+      // Skip blocks before the start position
+      if (position < range.start) {
+        position++
+        continue
+      }
 
       const t0 = performance.now()
       const result = await indexer.addSingleBlock(bee, line, batchId)
@@ -149,7 +163,7 @@ if (args.perBlock) {
       if (result.skipped) {
         console.log(`Block ${result.blockNumber}: skipped (already exists)`)
         totals.blocksSkipped++
-        processed++
+        position++
         continue
       }
 
@@ -158,7 +172,7 @@ if (args.perBlock) {
 
       console.log(`Block ${result.blockNumber}: upload=${(t1 - t0).toFixed(0)}ms`)
 
-      processed++
+      position++
     }
   }
 
@@ -212,9 +226,9 @@ console.log(`       synced in ${Date.now() - syncStarted} ms`)
 console.log(
   `       pages: ${syncResult.pagesUploaded} uploaded, ${syncResult.pagesSkipped} skipped`,
 )
-console.log(`       page table ref: ${syncResult.pageTableRef}`)
+console.log(`       db ref: ${syncResult.dbRef}`)
 
-const dbRef = syncResult.pageTableRef
+const dbRef = syncResult.dbRef
 
 // Close the database after sync completes
 indexer.close()
@@ -237,7 +251,7 @@ const metadata = {
   uploadedAt: new Date().toISOString(),
   beeUrl,
   batchId,
-  pageTableRef: dbRef,
+  dbRef: dbRef,
   totalPages: syncResult.totalPages,
   pagesUploaded: syncResult.pagesUploaded,
   pagesSkipped: syncResult.pagesSkipped,
@@ -255,5 +269,5 @@ const summarySkipMsg = totals.blocksSkipped > 0 ? `, ${totals.blocksSkipped} ski
 console.log(
   `       indexed ${totals.blocksAdded} blocks${summarySkipMsg}, ${totals.txHashesAdded} txs in ${elapsed} ms`,
 )
-console.log(`       page table ref: ${dbRef}`)
+console.log(`       db ref: ${dbRef}`)
 console.log(`       metadata:   ${metadataPath}`)
