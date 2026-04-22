@@ -18,23 +18,23 @@ import {
   saveManifest,
   writeBlockRangeMeta,
 } from './swarm.js'
+import { BeeChunkStream } from './swarm-ws.js'
 
 // ---------- Parse arguments ----------
 
-function parseArgs(argv: string[]): {
+interface Args {
   beeUrl?: string
   batchId?: string
   manifestHash?: string
   target?: string
   cacheManifest: boolean
-} {
-  const result: {
-    beeUrl?: string
-    batchId?: string
-    manifestHash?: string
-    target?: string
-    cacheManifest: boolean
-  } = { cacheManifest: true }
+  ws: boolean
+  /** Save the manifest every N blocks; undefined = save only at the end. */
+  saveEvery?: number
+}
+
+function parseArgs(argv: string[]): Args {
+  const result: Args = { cacheManifest: true, ws: false }
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
@@ -46,6 +46,17 @@ function parseArgs(argv: string[]): {
       result.manifestHash = argv[++i]
     } else if (arg === '--no-manifest-cache') {
       result.cacheManifest = false
+    } else if (arg === '--ws') {
+      result.ws = true
+    } else if (arg === '--per-block') {
+      result.saveEvery = 1
+    } else if (arg === '--save-every' && argv[i + 1]) {
+      const n = parseInt(argv[++i], 10)
+      if (!Number.isFinite(n) || n < 1) {
+        console.error(`error: --save-every expects a positive integer, got ${argv[i]}`)
+        process.exit(1)
+      }
+      result.saveEvery = n
     } else if (!arg.startsWith('--')) {
       result.target = arg
     }
@@ -61,7 +72,7 @@ if (!args.batchId) {
   console.error('')
   console.error('Usage:')
   console.error(
-    '  pnpm era:upload --batch-id <postage-batch-id> [--manifest <hash>] [--no-manifest-cache] [range]',
+    '  pnpm era:upload --batch-id <postage-batch-id> [--manifest <hash>] [--no-manifest-cache] [--ws] [range]',
   )
   console.error('')
   console.error('Examples:')
@@ -69,6 +80,15 @@ if (!args.batchId) {
   console.error('  pnpm era:upload --batch-id abc123... --manifest def456... 1')
   console.error('  pnpm era:upload --bee-url http://bee.example.com --batch-id abc123... 5')
   console.error('  pnpm era:upload --batch-id abc123... --no-manifest-cache 1')
+  console.error(
+    '  pnpm era:upload --batch-id abc123... --ws 0   # stream manifest chunks over /chunks/stream',
+  )
+  console.error(
+    '  pnpm era:upload --batch-id abc123... --per-block 2992       # checkpoint manifest after every block',
+  )
+  console.error(
+    '  pnpm era:upload --batch-id abc123... --save-every 500 2992  # checkpoint every 500 blocks',
+  )
   process.exit(1)
 }
 
@@ -141,13 +161,81 @@ if (rangeBefore) {
 const totals = { blocksUploaded: 0, txHashesIndexed: 0 }
 const runStarted = Date.now()
 
+if (args.saveEvery !== undefined && args.saveEvery <= 10) {
+  console.log(
+    `\nnote: --save-every ${args.saveEvery} will do a full manifest walk after every ${args.saveEvery}\n` +
+      `      block(s). Each walk is O(dirty-nodes-since-last-save), and 100 random-hash\n` +
+      `      tx/ forks easily dirty tens of thousands of interior nodes — the first save\n` +
+      `      may sit quietly in the recursive-fanout phase for a while before chunks start\n` +
+      `      flowing. If it feels stuck, try --save-every 500 or 1000 instead.\n`,
+  )
+}
+
+// If checkpointing is enabled, open the ws chunk stream (if requested) up
+// front so intermediate saves also get to use it.
+let chunkStream: BeeChunkStream | undefined
+if (args.ws) {
+  chunkStream = new BeeChunkStream({ beeUrl, batchId })
+  await timed('open ws /chunks/stream', () => chunkStream!.open())
+}
+
+async function saveManifestNow(label: string, writeTreeSnapshot: boolean) {
+  return saveManifest(bee, manifest, {
+    batchId,
+    onProgress: (msg) => console.log(`       [${label}] ${msg}`),
+    cacheManifest: args.cacheManifest,
+    chunkStream,
+    writeTreeSnapshot,
+  })
+}
+
 for (const t of uploadable) {
   console.log(header(t))
   const started = Date.now()
 
+  const progressPath = resolve(DATA_DIR, `${t.fileBase}.upload-progress.json`)
+  const checkpoint =
+    args.saveEvery !== undefined
+      ? {
+          every: args.saveEvery,
+          fn: async (processed: number, lastBlockNumber: string) => {
+            const checkpointStarted = Date.now()
+            console.log(`\n       ── checkpoint ${processed} blocks (last=${lastBlockNumber}) ──`)
+            // Skip the snapshot rewrite here: it walks the whole tree and
+            // pays O(total-chunks) disk I/O per checkpoint. Recovery from the
+            // previous snapshot + the intermediate manifest ref is good
+            // enough; the final save at end-of-run refreshes the snapshot.
+            const refs = await saveManifestNow(`checkpoint ${processed}`, false)
+            const payload = {
+              manifestReference: refs.root,
+              subManifests: {
+                number: refs.numberManifest,
+                hash: refs.hashManifest,
+                tx: refs.txManifest,
+              },
+              meta: refs.meta,
+              blocksProcessed: processed,
+              lastBlockNumber,
+              file: t.fileBase,
+              batchId,
+              beeUrl,
+              updatedAt: new Date().toISOString(),
+            }
+            await writeFile(progressPath, JSON.stringify(payload, null, 2))
+            console.log(
+              `       ✓ checkpoint ${processed} saved in ${Date.now() - checkpointStarted} ms\n` +
+                `         manifest: ${refs.root}\n` +
+                `         resume:   pnpm era:upload --batch-id ${batchId} --manifest ${refs.root} ...\n` +
+                `         progress: ${progressPath}`,
+            )
+          },
+        }
+      : undefined
+
   const res = await addBlocksToManifest(bee, manifest, t.blocksPath, {
     batchId,
     onProgress: (msg) => console.log(`       ${msg}`),
+    checkpoint,
   })
 
   totals.blocksUploaded += res.blocksUploaded
@@ -164,13 +252,19 @@ const meta = await timed('write /meta', () =>
     onProgress: (msg) => console.log(`       ${msg}`),
   }),
 )
-const manifestReference = await timed('save manifest', () =>
+
+const refs = await timed('save manifest', () =>
   saveManifest(bee, manifest, {
     batchId,
     onProgress: (msg) => console.log(`       ${msg}`),
     cacheManifest: args.cacheManifest,
+    chunkStream,
   }),
 )
+
+if (chunkStream) {
+  await timed('close ws /chunks/stream', () => chunkStream!.close())
+}
 
 if (meta) {
   console.log(`after:  firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}`)
@@ -198,7 +292,13 @@ const manifestData = {
   beeUrl,
   batchId,
   extendedFrom: args.manifestHash ?? null,
-  manifestReference,
+  manifestReference: refs.root,
+  subManifests: {
+    number: refs.numberManifest,
+    hash: refs.hashManifest,
+    tx: refs.txManifest,
+  },
+  meta: refs.meta,
   firstBlock: meta?.firstBlock ?? null,
   lastBlock: meta?.lastBlock ?? null,
   blocksUploaded: totals.blocksUploaded,
@@ -209,5 +309,8 @@ await writeFile(manifestPath, JSON.stringify(manifestData, null, 2))
 console.log(
   `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${formatDuration(elapsed)}`,
 )
-console.log(`       manifest: ${manifestReference}`)
+console.log(`       manifest: ${refs.root}`)
+console.log(`       number:   ${refs.numberManifest}`)
+console.log(`       hash:     ${refs.hashManifest}`)
+console.log(`       tx:       ${refs.txManifest}`)
 console.log(`       written:  ${manifestPath}`)

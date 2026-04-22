@@ -1,11 +1,13 @@
 export {
   ERAE_TYPE,
   fetchEraeFile,
+  openEraeFile,
   parseEraeFile,
   buildEraeIndex,
   type EraeBlock,
   type EraeFile,
   type EraeIndex,
+  type EraeReader,
 } from './erae.js'
 
 export {
@@ -17,7 +19,8 @@ export {
   getManifestBlockRange,
   writeBlockRangeMeta,
   type BlockRecord,
-  type UploadResult,
+  type Manifest,
+  type ManifestRefs,
   type UploadOptions,
   type AddBlocksResult,
   type ManifestMeta,

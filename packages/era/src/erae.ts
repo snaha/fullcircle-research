@@ -54,6 +54,14 @@ export interface EraeIndex {
   byTxHash: Map<string, { block: EraeBlock; txIndex: number }>
 }
 
+export interface EraeReader {
+  version: number
+  startingBlock: bigint
+  blockCount: number
+  accumulatorRoot?: Uint8Array
+  blocks(): Generator<EraeBlock>
+}
+
 // ---------- 1. Fetch an erae file ----------
 
 /**
@@ -71,13 +79,13 @@ export async function fetchEraeFile(url: string, init?: RequestInit): Promise<Ui
 
 // ---------- 2. Parse erae bytes into blocks ----------
 
-export function parseEraeFile(data: Uint8Array): EraeFile {
+export function openEraeFile(data: Uint8Array): EraeReader {
   const records = readAllRecords(data)
-  if (records.length === 0) throw new Error('parseEraeFile: empty file')
+  if (records.length === 0) throw new Error('openEraeFile: empty file')
 
   const first = records[0]
   if (first.type !== ERAE_TYPE.Version) {
-    throw new Error(`parseEraeFile: missing Version record (got 0x${first.type.toString(16)})`)
+    throw new Error(`openEraeFile: missing Version record (got 0x${first.type.toString(16)})`)
   }
 
   // Records in an erae file are grouped by TYPE, not interleaved per block:
@@ -124,50 +132,63 @@ export function parseEraeFile(data: Uint8Array): EraeFile {
 
   const { startingBlock, count } = parseBlockIndex(blockIndexRecord)
   if (headers.length !== count) {
-    throw new Error(`parseEraeFile: ${headers.length} headers vs BlockIndex count ${count}`)
+    throw new Error(`openEraeFile: ${headers.length} headers vs BlockIndex count ${count}`)
   }
   if (bodies.length !== count || receipts.length !== count) {
     throw new Error(
-      `parseEraeFile: mismatched counts header=${headers.length} body=${bodies.length} receipts=${receipts.length}`,
+      `openEraeFile: mismatched counts header=${headers.length} body=${bodies.length} receipts=${receipts.length}`,
     )
   }
   if (tds.length !== 0 && tds.length !== count) {
-    throw new Error(`parseEraeFile: partial TotalDifficulty: ${tds.length}/${count}`)
+    throw new Error(`openEraeFile: partial TotalDifficulty: ${tds.length}/${count}`)
   }
   if (proofs.length !== 0 && proofs.length !== count) {
-    throw new Error(`parseEraeFile: partial Proof: ${proofs.length}/${count}`)
+    throw new Error(`openEraeFile: partial Proof: ${proofs.length}/${count}`)
   }
 
-  const blocks: EraeBlock[] = new Array(count)
-  for (let i = 0; i < count; i++) {
-    const rawHeader = snappyFramedDecode(headers[i])
-    const rawBody = snappyFramedDecode(bodies[i])
-    const rawReceipts = snappyFramedDecode(receipts[i])
-    blocks[i] = {
-      number: readHeaderNumber(rawHeader),
-      hash: keccak_256(rawHeader),
-      rawHeader,
-      rawBody,
-      rawReceipts,
-      totalDifficulty: tds[i] ? readUint256LE(tds[i]) : undefined,
-      proof: proofs[i],
-      txHashes: extractTxHashes(rawBody),
+  function* blocks(): Generator<EraeBlock> {
+    for (let i = 0; i < count; i++) {
+      const rawHeader = snappyFramedDecode(headers[i])
+      const rawBody = snappyFramedDecode(bodies[i])
+      const rawReceipts = snappyFramedDecode(receipts[i])
+      const block: EraeBlock = {
+        number: readHeaderNumber(rawHeader),
+        hash: keccak_256(rawHeader),
+        rawHeader,
+        rawBody,
+        rawReceipts,
+        totalDifficulty: tds[i] ? readUint256LE(tds[i]) : undefined,
+        proof: proofs[i],
+        txHashes: extractTxHashes(rawBody),
+      }
+      if (i === 0 && block.number !== startingBlock) {
+        throw new Error(
+          `openEraeFile: header number ${block.number} != BlockIndex starting ${startingBlock}`,
+        )
+      }
+      yield block
     }
-  }
-
-  // Sanity: first block's decoded number should match BlockIndex.startingBlock.
-  if (blocks.length > 0 && blocks[0].number !== startingBlock) {
-    throw new Error(
-      `parseEraeFile: header number ${blocks[0].number} != BlockIndex starting ${startingBlock}`,
-    )
   }
 
   return {
     version: first.type,
     startingBlock,
-    blockCount: blocks.length,
-    blocks,
+    blockCount: count,
     accumulatorRoot,
+    blocks,
+  }
+}
+
+export function parseEraeFile(data: Uint8Array): EraeFile {
+  const reader = openEraeFile(data)
+  const blocks: EraeBlock[] = []
+  for (const b of reader.blocks()) blocks.push(b)
+  return {
+    version: reader.version,
+    startingBlock: reader.startingBlock,
+    blockCount: reader.blockCount,
+    blocks,
+    accumulatorRoot: reader.accumulatorRoot,
   }
 }
 
