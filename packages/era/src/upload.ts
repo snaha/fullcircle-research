@@ -12,6 +12,7 @@ import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
 import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
 import {
+  addBalanceEventsToManifest,
   addBlocksToManifest,
   getManifestBlockRange,
   openManifest,
@@ -31,10 +32,12 @@ interface Args {
   ws: boolean
   /** Save the manifest every N blocks; undefined = save only at the end. */
   saveEvery?: number
+  /** Skip uploading per-address/per-block balance events even when extracted. */
+  noState: boolean
 }
 
 function parseArgs(argv: string[]): Args {
-  const result: Args = { cacheManifest: true, ws: false }
+  const result: Args = { cacheManifest: true, ws: false, noState: false }
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
@@ -48,6 +51,8 @@ function parseArgs(argv: string[]): Args {
       result.cacheManifest = false
     } else if (arg === '--ws') {
       result.ws = true
+    } else if (arg === '--no-state') {
+      result.noState = true
     } else if (arg === '--per-block') {
       result.saveEvery = 1
     } else if (arg === '--save-every' && argv[i + 1]) {
@@ -88,6 +93,9 @@ if (!args.batchId) {
   )
   console.error(
     '  pnpm era:upload --batch-id abc123... --save-every 500 2992  # checkpoint every 500 blocks',
+  )
+  console.error(
+    '  pnpm era:upload --batch-id abc123... --no-state 0..6        # skip balance-events upload',
   )
   process.exit(1)
 }
@@ -245,6 +253,31 @@ for (const t of uploadable) {
   )
 }
 
+const stateTotals = { addressCount: 0, blockCount: 0, eventCount: 0 }
+if (!args.noState) {
+  const eventsPaths = uploadable.map((t) => t.balanceEventsPath).filter((p) => existsSync(p))
+  const skipped = uploadable.length - eventsPaths.length
+  if (eventsPaths.length > 0) {
+    console.log('\n== state ==')
+    if (skipped > 0) {
+      console.log(`note: ${skipped} era(s) have no balance-events file — skipping those`)
+    }
+    const stateRes = await timed('add state events', () =>
+      addBalanceEventsToManifest(bee, manifest, eventsPaths, {
+        batchId,
+        onProgress: (msg) => console.log(`       ${msg}`),
+      }),
+    )
+    stateTotals.addressCount = stateRes.addressCount
+    stateTotals.blockCount = stateRes.blockCount
+    stateTotals.eventCount = stateRes.eventCount
+  } else {
+    console.log(
+      '\nno balance-events files found — run "pnpm era:state-extract" first to index state',
+    )
+  }
+}
+
 console.log('\n== manifest ==')
 const meta = await timed('write /meta', () =>
   writeBlockRangeMeta(bee, manifest, {
@@ -297,20 +330,29 @@ const manifestData = {
     number: refs.numberManifest,
     hash: refs.hashManifest,
     tx: refs.txManifest,
+    address: refs.addressManifest,
+    balanceBlock: refs.balanceBlockManifest,
   },
   meta: refs.meta,
   firstBlock: meta?.firstBlock ?? null,
   lastBlock: meta?.lastBlock ?? null,
   blocksUploaded: totals.blocksUploaded,
   txHashesIndexed: totals.txHashesIndexed,
+  addressesUploaded: stateTotals.addressCount,
+  stateBlocksUploaded: stateTotals.blockCount,
+  eventsUploaded: stateTotals.eventCount,
 }
 await writeFile(manifestPath, JSON.stringify(manifestData, null, 2))
 
 console.log(
-  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${formatDuration(elapsed)}`,
+  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs,` +
+    ` ${stateTotals.addressCount} addresses, ${stateTotals.eventCount} events` +
+    ` in ${formatDuration(elapsed)}`,
 )
-console.log(`       manifest: ${refs.root}`)
-console.log(`       number:   ${refs.numberManifest}`)
-console.log(`       hash:     ${refs.hashManifest}`)
-console.log(`       tx:       ${refs.txManifest}`)
-console.log(`       written:  ${manifestPath}`)
+console.log(`       manifest:      ${refs.root}`)
+console.log(`       number:        ${refs.numberManifest ?? '(empty)'}`)
+console.log(`       hash:          ${refs.hashManifest ?? '(empty)'}`)
+console.log(`       tx:            ${refs.txManifest ?? '(empty)'}`)
+console.log(`       address:       ${refs.addressManifest ?? '(empty)'}`)
+console.log(`       balance-block: ${refs.balanceBlockManifest ?? '(empty)'}`)
+console.log(`       written:       ${manifestPath}`)

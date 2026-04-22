@@ -1,17 +1,21 @@
-// Swarm upload logic for Ethereum block data.
+// Swarm upload logic for Ethereum block data and state-balance events.
 //
-// Uploads a per-block bundle (RLP-encoded [rawHeader, rawBody, rawReceipts,
-// totalDifficulty]) and builds THREE Mantaray sub-manifests — one per index:
+// Uploads per-block bundles (RLP-encoded [rawHeader, rawBody, rawReceipts,
+// totalDifficulty]) plus per-address / per-block balance-event records, and
+// builds FIVE Mantaray sub-manifests — one per index:
 //
-//   numberManifest  forks keyed by `<blockNumber>`   -> block bundle
-//   hashManifest    forks keyed by `<blockHash>`     -> block bundle
-//   txManifest      forks keyed by `<txHash>`        -> block bundle
+//   numberManifest        forks keyed by `<blockNumber>`   -> block bundle
+//   hashManifest          forks keyed by `<blockHash>`     -> block bundle
+//   txManifest            forks keyed by `<txHash>`        -> block bundle
+//   addressManifest       forks keyed by `<addressHex>`    -> account record
+//   balanceBlockManifest  forks keyed by `<blockNumber>`   -> block-events record
 //
-// At save time the three sub-manifest roots are stitched into one combined
-// root manifest whose top-level forks are `number/`, `hash/`, `tx/` (plus an
-// optional `meta` leaf). Consumption stays identical — `GET /bzz/<root>/number/123`
-// still resolves — but the build path is three independent trees that can be
-// saved in parallel.
+// At save time the five sub-manifest roots are stitched into one combined
+// root manifest whose top-level forks are `number/`, `hash/`, `tx/`,
+// `address/`, `balance-block/` (plus an optional `meta` leaf). Consumption
+// stays identical — `GET /bzz/<root>/number/123` and
+// `GET /bzz/<root>/address/<hex>` both resolve — but the build path is
+// independent trees that can be saved in parallel.
 
 import { createReadStream } from 'node:fs'
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
@@ -43,9 +47,12 @@ export interface BlockRecord {
 
 export interface ManifestRefs {
   root: string
-  numberManifest: string
-  hashManifest: string
-  txManifest: string
+  /** Null when the sub-manifest is empty (e.g. tx/ for pre-Homestead eras). */
+  numberManifest: string | null
+  hashManifest: string | null
+  txManifest: string | null
+  addressManifest: string | null
+  balanceBlockManifest: string | null
   meta: string | null
 }
 
@@ -54,11 +61,25 @@ export interface AddBlocksResult {
   txHashesIndexed: number
 }
 
+export interface AddBalanceEventsResult {
+  addressCount: number
+  blockCount: number
+  eventCount: number
+}
+
 export interface ManifestMeta {
   firstBlock: string
   lastBlock: string
   blockCount: string
   txCount: string
+  /** Total balance events uploaded. 0 when the manifest carries no state. */
+  eventCount: string
+  /**
+   * Addresses that have had an account record written. Cumulative across
+   * upload runs — can overcount when the same address appears in multiple
+   * runs, since we don't dedupe against previously-uploaded addresses.
+   */
+  addressCount: string
 }
 
 export interface UploadOptions {
@@ -76,6 +97,8 @@ interface ManifestStats {
   lastBlock: bigint | null
   blockCount: bigint
   txCount: bigint
+  addressCount: bigint
+  eventCount: bigint
 }
 
 export interface Manifest {
@@ -85,6 +108,10 @@ export interface Manifest {
   hashManifest: MantarayNodeInstance
   /** Sub-manifest keyed by `<txHash>` (lowercase hex, no 0x prefix). */
   txManifest: MantarayNodeInstance
+  /** Sub-manifest keyed by `<addressHex>` (lowercase hex, no 0x prefix). */
+  addressManifest: MantarayNodeInstance
+  /** Sub-manifest keyed by `<blockNumber>` — balance-mutation events at that block. */
+  balanceBlockManifest: MantarayNodeInstance
   /** Running counters — serialised by `writeBlockRangeMeta`. */
   stats: ManifestStats
   /** Swarm ref of the last-written meta chunk; stitched into root at save. */
@@ -144,7 +171,9 @@ export async function openManifest(
       numberManifest: freshSubManifest(),
       hashManifest: freshSubManifest(),
       txManifest: freshSubManifest(),
-      stats: { firstBlock: null, lastBlock: null, blockCount: 0n, txCount: 0n },
+      addressManifest: freshSubManifest(),
+      balanceBlockManifest: freshSubManifest(),
+      stats: emptyStats(),
       metaRef: null,
     }
   }
@@ -191,10 +220,20 @@ export async function openManifest(
   const numberManifest = extractSubManifest(root, 'number/')
   const hashManifest = extractSubManifest(root, 'hash/')
   const txManifest = extractSubManifest(root, 'tx/')
+  const addressManifest = extractSubManifest(root, 'address/')
+  const balanceBlockManifest = extractSubManifest(root, 'balance-block/')
   const metaRef = extractMetaRef(root)
   const stats = metaRef ? await loadStatsFromMeta(bee, metaRef) : emptyStats()
 
-  return { numberManifest, hashManifest, txManifest, stats, metaRef }
+  return {
+    numberManifest,
+    hashManifest,
+    txManifest,
+    addressManifest,
+    balanceBlockManifest,
+    stats,
+    metaRef,
+  }
 }
 
 /**
@@ -288,18 +327,184 @@ export async function addBlocksToManifest(
   return { blocksUploaded, txHashesIndexed }
 }
 
+interface BalanceEvent {
+  block: string
+  addr: string
+  pre: string
+  post: string
+}
+
+interface AccountRecord {
+  addr: string
+  balance: string
+  eventCount: number
+  events: { block: string; pre: string; post: string }[]
+}
+
+interface BlockEventsRecord {
+  block: string
+  events: { addr: string; pre: string; post: string }[]
+}
+
+async function* readBalanceEventsNdjson(path: string): AsyncGenerator<BalanceEvent> {
+  const rl = createInterface({
+    input: createReadStream(path, 'utf8'),
+    crlfDelay: Infinity,
+  })
+  for await (const line of rl) {
+    if (line.trim()) yield JSON.parse(line) as BalanceEvent
+  }
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  let nextIndex = 0
+  let done = 0
+  const total = items.length
+
+  const runOne = async (): Promise<void> => {
+    while (true) {
+      const i = nextIndex++
+      if (i >= total) return
+      await worker(items[i], i)
+      done++
+      if (onProgress && done % 500 === 0) onProgress(done, total)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, total) }, runOne))
+  if (onProgress) onProgress(done, total)
+}
+
+/**
+ * Aggregate balance-mutation events from one or more NDJSON files and add
+ * them to the manifest's `addressManifest` and `balanceBlockManifest`
+ * sub-trees. Events are accumulated in memory across all input files first
+ * so per-address history spans every era in the run — that's why this isn't
+ * called per-era the way `addBlocksToManifest` is.
+ *
+ * Per address, uploads one `AccountRecord` JSON chunk with the final balance
+ * and the full event log (block-ordered). Per block, uploads one
+ * `BlockEventsRecord` JSON chunk with every balance change at that block.
+ *
+ * Overwrite semantics: if `manifest` already has a fork for an address, it
+ * gets replaced by the new record (previous chunk is orphaned). Upload all
+ * eras in one run to keep per-address history coherent.
+ */
+export async function addBalanceEventsToManifest(
+  bee: Bee,
+  manifest: Manifest,
+  eventsPaths: string[],
+  options: {
+    batchId: string
+    onProgress?: (msg: string) => void
+    concurrency?: number
+  },
+): Promise<AddBalanceEventsResult> {
+  const log = options.onProgress ?? console.log
+  const concurrency = options.concurrency ?? 32
+  const leafMeta = { 'Content-Type': 'application/json' }
+
+  const byAddr = new Map<string, { block: string; pre: string; post: string }[]>()
+  const byBlock = new Map<string, { addr: string; pre: string; post: string }[]>()
+  let eventCount = 0
+
+  for (const path of eventsPaths) {
+    log(`reading ${path}`)
+    let perFile = 0
+    for await (const ev of readBalanceEventsNdjson(path)) {
+      const addrEntry = byAddr.get(ev.addr)
+      if (addrEntry === undefined) {
+        byAddr.set(ev.addr, [{ block: ev.block, pre: ev.pre, post: ev.post }])
+      } else {
+        addrEntry.push({ block: ev.block, pre: ev.pre, post: ev.post })
+      }
+      const blockEntry = byBlock.get(ev.block)
+      if (blockEntry === undefined) {
+        byBlock.set(ev.block, [{ addr: ev.addr, pre: ev.pre, post: ev.post }])
+      } else {
+        blockEntry.push({ addr: ev.addr, pre: ev.pre, post: ev.post })
+      }
+      eventCount++
+      perFile++
+    }
+    log(`  ${perFile} events from ${path}`)
+  }
+
+  if (eventCount === 0) {
+    log('no balance events — skipping state upload')
+    return { addressCount: 0, blockCount: 0, eventCount: 0 }
+  }
+
+  log(`aggregated ${eventCount} events across ${byAddr.size} addresses and ${byBlock.size} blocks`)
+
+  const accountEntries = [...byAddr.entries()]
+  log(`uploading ${accountEntries.length} account records...`)
+  await runWithConcurrency(
+    accountEntries,
+    concurrency,
+    async ([addr, events]) => {
+      events.sort((a, b) => {
+        const da = BigInt(a.block) - BigInt(b.block)
+        return da < 0n ? -1 : da > 0n ? 1 : 0
+      })
+      const record: AccountRecord = {
+        addr,
+        balance: events[events.length - 1].post,
+        eventCount: events.length,
+        events,
+      }
+      const bytes = textEncoder.encode(JSON.stringify(record))
+      const { reference } = await bee.uploadData(options.batchId, bytes)
+      const ref = hexToBytes(reference.toString()) as Reference
+      const normalizedAddr = addr.toLowerCase().replace(/^0x/, '')
+      manifest.addressManifest.addFork(textEncoder.encode(normalizedAddr), ref, leafMeta)
+    },
+    (done, total) => log(`  accounts ${done}/${total}`),
+  )
+
+  const blockEntries = [...byBlock.entries()]
+  log(`uploading ${blockEntries.length} per-block event records...`)
+  await runWithConcurrency(
+    blockEntries,
+    concurrency,
+    async ([blockStr, events]) => {
+      events.sort((a, b) => (a.addr < b.addr ? -1 : a.addr > b.addr ? 1 : 0))
+      const record: BlockEventsRecord = { block: blockStr, events }
+      const bytes = textEncoder.encode(JSON.stringify(record))
+      const { reference } = await bee.uploadData(options.batchId, bytes)
+      const ref = hexToBytes(reference.toString()) as Reference
+      manifest.balanceBlockManifest.addFork(textEncoder.encode(blockStr), ref, leafMeta)
+    },
+    (done, total) => log(`  blocks ${done}/${total}`),
+  )
+
+  manifest.stats.addressCount += BigInt(byAddr.size)
+  manifest.stats.eventCount += BigInt(eventCount)
+
+  return { addressCount: byAddr.size, blockCount: byBlock.size, eventCount }
+}
+
 /**
  * Snapshot of the running stats as a `ManifestMeta`. Null when nothing has
  * been indexed yet. Pure read — does not touch Swarm.
  */
 export function getManifestBlockRange(manifest: Manifest): ManifestMeta | null {
-  const { firstBlock, lastBlock, blockCount, txCount } = manifest.stats
-  if (firstBlock === null || lastBlock === null || blockCount === 0n) return null
+  const { firstBlock, lastBlock, blockCount, txCount, addressCount, eventCount } = manifest.stats
+  const hasBlocks = firstBlock !== null && lastBlock !== null && blockCount > 0n
+  const hasState = eventCount > 0n
+  if (!hasBlocks && !hasState) return null
   return {
-    firstBlock: firstBlock.toString(),
-    lastBlock: lastBlock.toString(),
+    firstBlock: firstBlock !== null ? firstBlock.toString() : '0',
+    lastBlock: lastBlock !== null ? lastBlock.toString() : '0',
     blockCount: blockCount.toString(),
     txCount: txCount.toString(),
+    eventCount: eventCount.toString(),
+    addressCount: addressCount.toString(),
   }
 }
 
@@ -322,7 +527,8 @@ export async function writeBlockRangeMeta(
   const { reference } = await bee.uploadData(options.batchId, metaBytes)
   manifest.metaRef = hexToBytes(reference) as Reference
   log(
-    `meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock} blockCount=${meta.blockCount} txCount=${meta.txCount}`,
+    `meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock} blockCount=${meta.blockCount}` +
+      ` txCount=${meta.txCount} addressCount=${meta.addressCount} eventCount=${meta.eventCount}`,
   )
   return meta
 }
@@ -359,22 +565,41 @@ export async function saveManifest(
   const upload = makeUploadFn(bee, options.batchId, options.chunkStream, cacheEnabled)
   const tracker = makeSaveProgressTracker(log)
 
-  const subSave = (label: string, node: MantarayNodeInstance) =>
-    saveMantarayTree(node, upload, concurrency, (msg) => log(`[${label}] ${msg}`), tracker, label)
+  const subSave = async (
+    label: string,
+    node: MantarayNodeInstance,
+  ): Promise<Reference | null> => {
+    if (!hasAnyFork(node) && !node.getEntry) {
+      log(`[${label}] empty sub-manifest — skipping save`)
+      return null
+    }
+    return saveMantarayTree(
+      node,
+      upload,
+      concurrency,
+      (msg) => log(`[${label}] ${msg}`),
+      tracker,
+      label,
+    )
+  }
 
-  let numberRef: Reference
-  let hashRef: Reference
-  let txRef: Reference
+  let numberRef: Reference | null
+  let hashRef: Reference | null
+  let txRef: Reference | null
+  let addressRef: Reference | null
+  let balanceBlockRef: Reference | null
   let rootRef: Reference
   const root = new MantarayNode()
   try {
-    ;[numberRef, hashRef, txRef] = await Promise.all([
+    ;[numberRef, hashRef, txRef, addressRef, balanceBlockRef] = await Promise.all([
       subSave('number', manifest.numberManifest),
       subSave('hash', manifest.hashManifest),
       subSave('tx', manifest.txManifest),
+      subSave('address', manifest.addressManifest),
+      subSave('balance-block', manifest.balanceBlockManifest),
     ])
 
-    // Stitch a fresh root with the three clean sub-manifests as descendants.
+    // Stitch a fresh root with the clean sub-manifests as descendants.
     // Since each sub-manifest's root has `contentAddress` set after save, our
     // dirty-walk will upload only the new root chunk.
     root.setObfuscationKey = Utils.gen32Bytes()
@@ -382,6 +607,8 @@ export async function saveManifest(
     mountSubManifest(root, 'number/', manifest.numberManifest)
     mountSubManifest(root, 'hash/', manifest.hashManifest)
     mountSubManifest(root, 'tx/', manifest.txManifest)
+    mountSubManifest(root, 'address/', manifest.addressManifest)
+    mountSubManifest(root, 'balance-block/', manifest.balanceBlockManifest)
     if (manifest.metaRef) {
       root.addFork(textEncoder.encode('meta'), manifest.metaRef, {
         'Content-Type': 'application/json',
@@ -402,14 +629,18 @@ export async function saveManifest(
 
   const refs: ManifestRefs = {
     root: bytesToHex(rootRef),
-    numberManifest: bytesToHex(numberRef),
-    hashManifest: bytesToHex(hashRef),
-    txManifest: bytesToHex(txRef),
+    numberManifest: numberRef ? bytesToHex(numberRef) : null,
+    hashManifest: hashRef ? bytesToHex(hashRef) : null,
+    txManifest: txRef ? bytesToHex(txRef) : null,
+    addressManifest: addressRef ? bytesToHex(addressRef) : null,
+    balanceBlockManifest: balanceBlockRef ? bytesToHex(balanceBlockRef) : null,
     meta: manifest.metaRef ? bytesToHex(manifest.metaRef) : null,
   }
 
   log(
-    `manifest saved: root=${refs.root} number=${refs.numberManifest} hash=${refs.hashManifest} tx=${refs.txManifest}`,
+    `manifest saved: root=${refs.root} number=${refs.numberManifest ?? '(empty)'}` +
+      ` hash=${refs.hashManifest ?? '(empty)'} tx=${refs.txManifest ?? '(empty)'}` +
+      ` address=${refs.addressManifest ?? '(empty)'} balance-block=${refs.balanceBlockManifest ?? '(empty)'}`,
   )
 
   if (cacheEnabled && options.writeTreeSnapshot !== false) {
@@ -435,7 +666,14 @@ const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
 function emptyStats(): ManifestStats {
-  return { firstBlock: null, lastBlock: null, blockCount: 0n, txCount: 0n }
+  return {
+    firstBlock: null,
+    lastBlock: null,
+    blockCount: 0n,
+    txCount: 0n,
+    addressCount: 0n,
+    eventCount: 0n,
+  }
 }
 
 function freshSubManifest(): MantarayNodeInstance {
@@ -515,12 +753,14 @@ function bytesStartWith(haystack: Uint8Array, prefix: Uint8Array): boolean {
 async function loadStatsFromMeta(bee: Bee, metaRef: Reference): Promise<ManifestStats> {
   try {
     const bytes = new Uint8Array(await bee.downloadData(bytesToHex(metaRef)))
-    const parsed = JSON.parse(textDecoder.decode(bytes)) as ManifestMeta
+    const parsed = JSON.parse(textDecoder.decode(bytes)) as Partial<ManifestMeta>
     return {
-      firstBlock: BigInt(parsed.firstBlock),
-      lastBlock: BigInt(parsed.lastBlock),
-      blockCount: BigInt(parsed.blockCount),
-      txCount: BigInt(parsed.txCount),
+      firstBlock: parsed.firstBlock !== undefined ? BigInt(parsed.firstBlock) : null,
+      lastBlock: parsed.lastBlock !== undefined ? BigInt(parsed.lastBlock) : null,
+      blockCount: parsed.blockCount !== undefined ? BigInt(parsed.blockCount) : 0n,
+      txCount: parsed.txCount !== undefined ? BigInt(parsed.txCount) : 0n,
+      addressCount: parsed.addressCount !== undefined ? BigInt(parsed.addressCount) : 0n,
+      eventCount: parsed.eventCount !== undefined ? BigInt(parsed.eventCount) : 0n,
     }
   } catch {
     return emptyStats()
