@@ -38,6 +38,21 @@ export interface SourceMeta {
   lastBlock: string
   blockCount: string
   txCount: string
+  addressCount: string
+  eventCount: string
+}
+
+export interface AccountEvent {
+  block: string
+  pre: string
+  post: string
+}
+
+export interface AccountRecord {
+  addr: string
+  balance: string
+  eventCount: number
+  events: AccountEvent[]
 }
 
 const POT_INDEX_MAP: Record<Index, PotIndex> = {
@@ -57,6 +72,8 @@ export async function fetchMeta(): Promise<SourceMeta> {
     lastBlock: '0',
     blockCount: '0',
     txCount: '0',
+    addressCount: '0',
+    eventCount: '0',
   }
   try {
     if (settings.source === 'manifest') {
@@ -75,12 +92,17 @@ export async function fetchMeta(): Promise<SourceMeta> {
 
 function parseMeta(data: unknown, empty: SourceMeta): SourceMeta {
   if (!data || typeof data !== 'object') return empty
-  const { firstBlock, lastBlock, blockCount, txCount } = data as Record<string, unknown>
+  const { firstBlock, lastBlock, blockCount, txCount, addressCount, eventCount } = data as Record<
+    string,
+    unknown
+  >
   return {
     firstBlock: typeof firstBlock === 'string' ? firstBlock : empty.firstBlock,
     lastBlock: typeof lastBlock === 'string' ? lastBlock : empty.lastBlock,
     blockCount: typeof blockCount === 'string' ? blockCount : empty.blockCount,
     txCount: typeof txCount === 'string' ? txCount : empty.txCount,
+    addressCount: typeof addressCount === 'string' ? addressCount : empty.addressCount,
+    eventCount: typeof eventCount === 'string' ? eventCount : empty.eventCount,
   }
 }
 
@@ -186,4 +208,27 @@ export async function probeIndex(index: Index, key: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Fetch the per-address account record (final balance + full event log).
+ * Address-balance data is only indexed in the Mantaray manifest source today —
+ * POT has no address KVS, so this throws when called on a POT source.
+ */
+export async function fetchAccount(addr: string): Promise<AccountRecord> {
+  if (settings.source !== 'manifest') {
+    throw new Error('Address lookup is not available on POT sources — select a manifest source.')
+  }
+  const normalized = addr.toLowerCase().replace(/^0x/, '')
+  if (!/^[0-9a-f]{40}$/.test(normalized)) {
+    throw new Error(`invalid address: ${addr}`)
+  }
+  const url = `${settings.beeUrl}/bzz/${settings.manifestRef}/address/${normalized}`
+  const res = await fetch(url)
+  if (!res.ok) {
+    if (res.status === 404) throw new Error(`address not indexed: 0x${normalized}`)
+    throw new Error(`bee ${res.status} ${res.statusText}: address/${normalized}`)
+  }
+  const record = (await res.json()) as AccountRecord
+  return record
 }

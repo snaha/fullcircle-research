@@ -15,6 +15,7 @@ export {
   readBlocksNdjson,
   openManifest,
   addBlocksToManifest,
+  addBalanceEventsToManifest,
   saveManifest,
   getManifestBlockRange,
   writeBlockRangeMeta,
@@ -23,6 +24,7 @@ export {
   type ManifestRefs,
   type UploadOptions,
   type AddBlocksResult,
+  type AddBalanceEventsResult,
   type ManifestMeta,
 } from './swarm.js'
 

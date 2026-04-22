@@ -22,6 +22,7 @@ export interface Target {
   blocksPath: string
   indexPath: string
   summaryPath: string
+  balanceEventsPath: string
 }
 
 function targetFor(url: string, era: number | null): Target {
@@ -34,6 +35,7 @@ function targetFor(url: string, era: number | null): Target {
     blocksPath: resolve(DATA_DIR, `${fileBase}.blocks.ndjson`),
     indexPath: resolve(DATA_DIR, `${fileBase}.index.ndjson`),
     summaryPath: resolve(DATA_DIR, `${fileBase}.summary.json`),
+    balanceEventsPath: resolve(DATA_DIR, `${fileBase}.balance-events.ndjson`),
   }
 }
 

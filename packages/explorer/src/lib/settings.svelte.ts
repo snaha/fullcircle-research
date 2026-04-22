@@ -92,6 +92,11 @@ export function hasTxIndex(): boolean {
   return isHex64(settings.potByTx) && settings.potByTx !== ZERO_REF
 }
 
+/** True when address → balance lookup is available. Manifest-only for now. */
+export function hasAddressIndex(): boolean {
+  return settings.source === 'manifest' && isHex64(settings.manifestRef)
+}
+
 /** Short human label for the current source — used in the header badge. */
 export function sourceLabel(): string {
   if (settings.source === 'manifest') {
