@@ -20,7 +20,8 @@
 8. [Cross-Check and Oracle](#8-cross-check-and-oracle)
 9. [Open Questions and TBDs](#9-open-questions-and-tbds)
 10. [Recommended Path](#10-recommended-path)
-11. [Primary Sources](#11-primary-sources)
+11. [Implementation Status: Stage 1.a](#11-implementation-status-stage-1a-shipped-april-2026)
+12. [Primary Sources](#12-primary-sources)
 
 ---
 
@@ -336,21 +337,78 @@ To be resolved at implementation time, flagged here so we don't silently assume:
 - [ ] **erae → RLP chain file converter**: we need a small utility that reads `.erae` from [`packages/era/src/erae.ts`](../packages/era/src/erae.ts) and emits a concatenated RLP stream suitable for `geth import`. Not hard, not yet written.
 - [ ] **Which genesis file exactly?** Geth historically shipped `genesis.json` for mainnet; confirm the current canonical path / how to generate it (`geth dumpgenesis` on a running mainnet node, probably, or grab from the go-ethereum repo).
 - [ ] **Stamp / postage strategy** at Stage 1 scale (163 840 blocks × ~N balance events/block × 3 indexes). Not addressed here; follow the existing era package's stamp handling.
-- [ ] **`@ethereumjs/vm` viability re-check.** Before committing to the Go path, a half-day spike: can we subclass `StateManager`, capture balance deltas, and produce the same NDJSON? If yes, the whole project stays in TypeScript.
+- [x] **`@ethereumjs/vm` viability re-check.** Confirmed viable for pre-Byzantium — see §11. Open question for later hardforks remains.
 - [ ] **Stage 2 proof layer.** Deferred, but without it snapshot consumers are trusting the uploader.
 
 ---
 
 ## 10. Recommended Path
 
-1. **Stage 1.a — prove the tracer.** Write the ~200 LOC Go tracer, build with `geth-builder`, run against one erae (8 192 blocks ≈ first 46 days of mainnet). Validate NDJSON output against `cryo balance_diffs` for the same range. No Swarm yet.
+1. **Stage 1.a — prove the extractor.** ✅ Shipped — see §11. Pivoted from the Go tracer to a pure-TS `@ethereumjs/vm` runner after confirming bit-perfect behaviour pre-Byzantium. 65 536 blocks replayed in ~85 s; spot-checked against block 46 147 (first-ever ETH tx).
 2. **Stage 1.b — wire up upload.** Add a TS CLI entry alongside [`packages/era/src/upload.ts`](../packages/era/src/upload.ts) that reads `balance-events.ndjson` and builds the `byAddress` / `byBlock` / `meta` POT manifests via [`packages/era/src/swarm-pot.ts`](../packages/era/src/swarm-pot.ts). End-to-end round trip: pick one address from one block, fetch its events from Swarm, reconstruct running balance, compare to `eth_getBalance` on an archive node.
-3. **Stage 1.c — scale to 20 eras.** Process one era per run, checkpoint, resume. Spot-check against `cryo` for three sampled ranges. Document throughput and index-size.
-4. **Stage 2 — progressive diffs + sparse baselines.** Same tracer, extended to emit `storage-events.ndjson` + `code-events.ndjson`. Add `diff/<block>` upload (per-block delta chunks) and a `snapshot/<block>` baseline at genesis, optionally later ones. Reconstruction = baseline + forward diffs. This single architecture answers both "every address whose balance changed at block N" (via `byBlock`) and "store the full state on Swarm progressively, only uploading changes" (via `diff/<block>` + sparse baselines).
+3. **Stage 1.c — scale past Homestead.** Process one era per run, checkpoint, resume. Spot-check against `cryo` for three sampled ranges. At Homestead (block 1 150 000) activate fork-by-block-number; validate continued ethereumjs compatibility or pivot to the geth tracer path (§2) at that point. Document throughput and index-size.
+4. **Stage 2 — progressive diffs + sparse baselines.** Same extractor, extended to emit `storage-events.ndjson` + `code-events.ndjson`. Add `diff/<block>` upload (per-block delta chunks) and a `snapshot/<block>` baseline at genesis, optionally later ones. Reconstruction = baseline + forward diffs. This single architecture answers both "every address whose balance changed at block N" (via `byBlock`) and "store the full state on Swarm progressively, only uploading changes" (via `diff/<block>` + sparse baselines).
 
 ---
 
-## 11. Primary Sources
+## 11. Implementation Status: Stage 1.a (shipped April 2026)
+
+The balance-event extractor is in the repo — pre-Byzantium only, no Swarm upload yet. Built as a pure-TS runner using `@ethereumjs/vm` rather than the Go tracer originally recommended in §2. The pivot rationale:
+
+- **Scope fit.** Eras 0..7 = 65 536 blocks, all before Homestead (1 150 000) and well before Byzantium — territory where ethereumjs is a safe, bit-perfect executor.
+- **In-workspace.** Reuses the existing erae parser at [`packages/era/src/erae.ts`](../packages/era/src/erae.ts). No Go toolchain, no separate geth DB, no erae→RLP conversion step.
+- **Iteration speed.** Full 0..7 run is ~85 seconds. A Go tracer + `geth import` pipeline is hours of first-time setup.
+
+The geth live tracer path remains the forward-looking recommendation for modern hardforks where ethereumjs compatibility risk grows — re-evaluate once Stage 1.c hits Homestead.
+
+### What's in the tree
+
+- [`packages/era/src/state-extract.ts`](../packages/era/src/state-extract.ts) — re-executes blocks via `@ethereumjs/vm`, subclasses `MerkleStateManager` to hook `putAccount`, emits NDJSON per balance mutation. All `modifyAccountFields` calls funnel through `putAccount`, so the single hook captures every balance change (block rewards, uncle rewards, tx value transfers, gas buy/return, SELFDESTRUCT, etc.).
+- Pnpm scripts: root `pnpm era:state-extract [range]` (forwards to the era package). Range syntax matches the existing era CLIs: `0..7`, `3`, or a bare default of `0..7`.
+- Outputs under `data/` (gitignored):
+  - `balance-events.ndjson` — `{block, addr, pre, post}` per mutation. Addresses 0x-prefixed, balances decimal wei as strings.
+  - `balance-events.meta.ndjson` — `{kind:"block", block, hash, cumulative}` sentinel per executed block; ties the event stream to specific block hashes for downstream verification and checkpointing.
+
+### Verified behaviour
+
+Spot-checked against block 46 147 (mainnet's first-ever ETH transaction, 7 Aug 2015): 5 events emitted, all correct to the wei — sender gas buy, tx value transfer, miner gas return, nephew-bonus block reward, and uncle miner reward all match on-chain truth.
+
+Genesis allocations (~8 891 non-zero accounts) emitted as synthetic `pre:"0"` events at block 0 so downstream indexers see the initial distribution as a normal event stream.
+
+### Measured performance on eras 0..7
+
+| Metric | Value |
+|---|---|
+| Blocks executed | 65 535 (genesis skipped) |
+| Balance events | 152 769 (8 891 genesis + 143 878 execution) |
+| Wall time | ~85 seconds |
+| Throughput | ~780 blocks/s avg; peak ~3 500 bps on sparse early eras |
+| `balance-events.ndjson` size | ~19 MB |
+| `balance-events.meta.ndjson` size | ~8 MB |
+
+### Known limitations
+
+Called out so they don't become invisible debt:
+
+1. **Hardfork pinned to Chainstart (Frontier).** Fine for eras 0..7 (pre-Homestead). Extending past block 1 150 000 requires either `common.setHardforkBy({ blockNumber })` per block or `hardforkByHeadBlockNumber: true` on the blockchain; validate both still route through `putAccount` correctly when fork rules change.
+2. **No checkpoint resume.** Every invocation re-executes from genesis. Acceptable at 85 s; painful once we cross Byzantium. Real resume means persisting the state trie + last-processed-block to disk between runs.
+3. **Unbounded in-memory blockchain.** Every processed block is kept via `blockchain.putBlock` so later blocks' `BLOCKHASH` opcodes can look up recent hashes. Safe at 65 k blocks (<200 MB), wrong at millions. Fix: prune older than tip − 256 (the EVM spec's lookback limit).
+4. **No `BalanceChangeReason` tags.** Ethereumjs doesn't surface the reason enum that geth's live tracer provides. Events are bare `pre → post` diffs; a consumer cannot tell a gas buy from a transfer without cross-referencing the block. Restored if/when we pivot to the geth path.
+5. **No Swarm upload.** Output is local NDJSON only — Stage 1.b.
+6. **Storage / code changes not captured.** We hook only `putAccount`. Stage 2 requires also hooking `putCode` + `putContractStorage` and emitting corresponding NDJSON streams.
+7. **ethereumjs-vs-geth compatibility risk past Byzantium.** Safe for the current scope and through Homestead in practice. Every later fork is a re-validation risk; keep `cryo balance_diffs` in the loop as an oracle (§8).
+
+### When to revisit the Go tracer path
+
+Pivot back to §2's geth live tracer if any of these hit:
+
+- A hardfork where ethereumjs has a known state-update bug.
+- A need for `BalanceChangeReason` tags that the consumer relies on.
+- Sustained throughput requirements above the ethereumjs ceiling (single-threaded JS, currently ~3 kbps peak).
+
+---
+
+## 12. Primary Sources
 
 Geth live tracing:
 - [Live tracing overview](https://geth.ethereum.org/docs/developers/evm-tracing/live-tracing)
