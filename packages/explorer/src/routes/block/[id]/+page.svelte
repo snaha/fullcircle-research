@@ -16,8 +16,11 @@
   import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left'
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
 
+  const TX_PER_PAGE = 10
+
   let id = $derived(page.params.id ?? '')
   let index = $derived<'number' | 'hash'>(/^\d+$/.test(id) ? 'number' : 'hash')
+  let txPageNum = $derived(Math.max(0, Number(page.url.searchParams.get('txp') ?? 0) || 0))
 
   let block = $state<FetchedBlock | null>(null)
   let error = $state<string | null>(null)
@@ -207,12 +210,53 @@
       </Card.Content>
     </Card.Root>
 
+    {@const totalTxs = block.body.transactions.length}
+    {@const txTotalPages = Math.max(1, Math.ceil(totalTxs / TX_PER_PAGE))}
+    {@const clampedTxPage = Math.min(txPageNum, txTotalPages - 1)}
+    {@const txStart = clampedTxPage * TX_PER_PAGE}
+    {@const txEnd = Math.min(txStart + TX_PER_PAGE, totalTxs)}
+    {@const visibleTxs = block.body.transactions.slice(txStart, txEnd)}
+    {@const txPrevHref = clampedTxPage > 0 ? `/block/${id}?txp=${clampedTxPage - 1}` : undefined}
+    {@const txNextHref =
+      clampedTxPage < txTotalPages - 1 ? `/block/${id}?txp=${clampedTxPage + 1}` : undefined}
+
     <Card.Root>
-      <Card.Header>
-        <Card.Title>Transactions ({block.body.transactions.length})</Card.Title>
+      <Card.Header class="flex flex-row flex-wrap items-start justify-between gap-4">
+        <div class="flex flex-col gap-1.5">
+          <Card.Title>Transactions ({totalTxs})</Card.Title>
+          {#if totalTxs > 0}
+            <Card.Description>
+              Showing {txStart + 1}–{txEnd} of {totalTxs} · page {clampedTxPage + 1} of {txTotalPages}
+            </Card.Description>
+          {/if}
+        </div>
+        {#if totalTxs > TX_PER_PAGE}
+          <div class="flex items-center gap-2">
+            <Button
+              href={txPrevHref}
+              disabled={!txPrevHref}
+              variant="outline"
+              size="sm"
+              aria-label="Previous transactions"
+            >
+              <ChevronLeftIcon />
+              Prev
+            </Button>
+            <Button
+              href={txNextHref}
+              disabled={!txNextHref}
+              variant="outline"
+              size="sm"
+              aria-label="Next transactions"
+            >
+              Next
+              <ChevronRightIcon />
+            </Button>
+          </div>
+        {/if}
       </Card.Header>
       <Card.Content class="px-0">
-        {#if block.body.transactions.length === 0}
+        {#if totalTxs === 0}
           <p class="px-6 text-sm text-muted-foreground">No transactions in this block.</p>
         {:else}
           <div class="overflow-x-auto">
@@ -228,7 +272,7 @@
                 </tr>
               </thead>
               <tbody>
-                {#each block.body.transactions as tx (tx.hash)}
+                {#each visibleTxs as tx (tx.hash)}
                   <tr class="border-b last:border-0 hover:bg-muted/50">
                     <td class="px-6 py-2 font-mono">
                       <a
@@ -264,6 +308,23 @@
           </div>
         {/if}
       </Card.Content>
+      {#if totalTxs > TX_PER_PAGE}
+        <Card.Footer class="flex items-center justify-between gap-2">
+          <span class="text-xs text-muted-foreground">
+            Page {clampedTxPage + 1} of {txTotalPages}
+          </span>
+          <div class="flex items-center gap-2">
+            <Button href={txPrevHref} disabled={!txPrevHref} variant="outline" size="sm">
+              <ChevronLeftIcon />
+              Prev
+            </Button>
+            <Button href={txNextHref} disabled={!txNextHref} variant="outline" size="sm">
+              Next
+              <ChevronRightIcon />
+            </Button>
+          </div>
+        </Card.Footer>
+      {/if}
     </Card.Root>
   {/if}
 </main>

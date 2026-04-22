@@ -15,6 +15,8 @@ import { Bee } from '@ethersphere/bee-js'
 import MantarayJs from 'mantaray-js'
 import { encodeBlockBundle } from './bundle.js'
 import { DATA_DIR } from './cli-shared.js'
+import { MAX_PAYLOAD_SIZE } from './swarm-chunk.js'
+import type { BeeChunkStream } from './swarm-ws.js'
 
 const { MantarayNode, Utils, loadAllNodes } = MantarayJs
 
@@ -175,11 +177,34 @@ export async function addBlocksToManifest(
   bee: Bee,
   manifest: MantarayNodeInstance,
   blocksPath: string,
-  options: { batchId: string; onProgress?: (msg: string) => void },
+  options: {
+    batchId: string
+    onProgress?: (msg: string) => void
+    /**
+     * Persist the manifest to Swarm after every N blocks. Only dirty nodes are
+     * re-uploaded each time (Mantaray tracks this internally), so this buys
+     * resumability at modest extra cost. Omit for one final save at the end.
+     */
+    checkpoint?: {
+      every: number
+      fn: (blocksProcessed: number, lastBlockNumber: string) => Promise<void>
+    }
+  },
 ): Promise<AddBlocksResult> {
   const log = options.onProgress ?? console.log
   let blocksUploaded = 0
   let txHashesIndexed = 0
+
+  // When checkpointing at small cadence, the default every-100-blocks log
+  // swallows everything between checkpoints. Emit more often the smaller the
+  // checkpoint window gets, capped so bulk runs stay readable.
+  const every = options.checkpoint?.every
+  const logEvery = every !== undefined ? Math.max(1, Math.min(100, Math.ceil(every / 5))) : 100
+
+  const startedAt = Date.now()
+  let windowStartAt = startedAt
+  let windowStartBlocks = 0
+  let windowStartTxs = 0
 
   for await (const block of readBlocksNdjson(blocksPath)) {
     const bundleBytes = encodeBlockBundle({
@@ -209,8 +234,26 @@ export async function addBlocksToManifest(
     }
 
     blocksUploaded++
-    if (blocksUploaded % 100 === 0) {
-      log(`uploaded ${blocksUploaded} blocks, ${txHashesIndexed} tx hashes indexed`)
+    if (blocksUploaded % logEvery === 0) {
+      const now = Date.now()
+      const windowMs = Math.max(1, now - windowStartAt)
+      const windowBlocks = blocksUploaded - windowStartBlocks
+      const windowTxs = txHashesIndexed - windowStartTxs
+      const totalMs = Math.max(1, now - startedAt)
+      log(
+        `uploaded ${blocksUploaded} blocks, ${txHashesIndexed} txs` +
+          ` (window ${windowBlocks} blk / ${windowTxs} tx in ${windowMs} ms,` +
+          ` ${((windowBlocks / windowMs) * 1000).toFixed(1)} blk/s,` +
+          ` ${((windowTxs / windowMs) * 1000).toFixed(0)} tx/s;` +
+          ` avg ${((blocksUploaded / totalMs) * 1000).toFixed(1)} blk/s)`,
+      )
+      windowStartAt = now
+      windowStartBlocks = blocksUploaded
+      windowStartTxs = txHashesIndexed
+    }
+
+    if (options.checkpoint && blocksUploaded % options.checkpoint.every === 0) {
+      await options.checkpoint.fn(blocksUploaded, block.number)
     }
   }
 
@@ -288,37 +331,196 @@ export async function saveManifest(
     concurrency?: number
     onProgress?: (msg: string) => void
     cacheManifest?: boolean
+    chunkStream?: BeeChunkStream
+    /**
+     * Rewrite the consolidated on-disk snapshot after saving. Walks every
+     * node in the tree to read their cached chunks, so it's expensive for
+     * big manifests — skip on intermediate checkpoints and only write on the
+     * final save of a run.
+     */
+    writeTreeSnapshot?: boolean
   },
 ): Promise<string> {
   const log = options.onProgress ?? console.log
   const totalChunks = countMantarayNodes(manifest)
-  log(`uploading manifest (${totalChunks} chunks)...`)
+  const via = options.chunkStream ? 'ws' : 'http'
+  log(`uploading manifest (${totalChunks} chunks in tree via ${via})...`)
 
   const concurrency = options.concurrency ?? 32
   const cacheEnabled = options.cacheManifest !== false
 
-  const rawUpload = async (data: Uint8Array) => {
+  const rawHttpUpload = async (data: Uint8Array) => {
     const result = await bee.uploadData(options.batchId, data)
     return hexToBytes(result.reference) as Reference
   }
+  // Manifest nodes are almost always ≤4 KB (one chunk). The rare fatter node
+  // spills into a Swarm tree whose root ref we can only get from /bytes —
+  // fall back to HTTP just for those.
+  const stream = options.chunkStream
+  const rawUpload = stream
+    ? async (data: Uint8Array) => {
+        if (data.length <= MAX_PAYLOAD_SIZE) {
+          const address = await stream.uploadChunkPayload(data)
+          return address as Reference
+        }
+        return rawHttpUpload(data)
+      }
+    : rawHttpUpload
   const uploadFn = cacheEnabled ? makeCachedSaver(rawUpload) : rawUpload
 
-  const queuedUpload = createUploadQueue(concurrency, totalChunks, uploadFn, (uploaded, total) => {
-    if (uploaded % 100 === 0 || uploaded === total) {
-      log(`manifest chunks: ${uploaded}/${total}`)
+  // mantaray-js's MantarayNode.save() spawns a Promise per fork of every
+  // dirty node — including clean forks that short-circuit. For a big tree
+  // that means millions of Promise allocations before the first chunk ever
+  // flows, which manifests as a multi-minute stall with 0 uploads. We
+  // replace it with an iterative walker that only allocates work for dirty
+  // nodes and enforces post-order via child-count decrements.
+  const saveStartedAt = Date.now()
+  let lastLoggedAt = 0
+  let uploadedCount = 0
+  let dirtyCount = 0
+
+  // Phase 1: synchronously find every dirty node and record its dirty-child
+  // count. A clean node (contentAddress set) is a dead end — we don't descend
+  // into it and we don't allocate anything for it. This is what keeps us out
+  // of the O(dirty × 256) Promise explosion.
+  const remaining = new Map<MantarayNodeInstance, number>()
+  const parents = new Map<MantarayNodeInstance, MantarayNodeInstance>()
+  const ready: MantarayNodeInstance[] = []
+  let readyHead = 0 // pointer into `ready`; avoids O(n) shift() in hot loop
+
+  ;(function walk(node: MantarayNodeInstance): void {
+    if (node.getContentAddress) return
+    let dirtyChildren = 0
+    if (node.forks) {
+      for (const fork of Object.values(node.forks)) {
+        const child = fork.node
+        if (child.getContentAddress) continue
+        dirtyChildren++
+        parents.set(child, node)
+        walk(child)
+      }
     }
-  })
+    remaining.set(node, dirtyChildren)
+    dirtyCount++
+    if (dirtyChildren === 0) ready.push(node)
+  })(manifest)
 
-  const manifestRef = await manifest.save(queuedUpload)
-  const manifestReference = bytesToHex(manifestRef)
-  log(`manifest saved: ${manifestReference}`)
+  const walkMs = Date.now() - saveStartedAt
+  log(`dirty nodes: ${dirtyCount} (tree=${totalChunks}, walk=${walkMs} ms)`)
 
-  if (cacheEnabled) {
+  if (dirtyCount === 0) {
+    // Nothing to upload; just return the existing root ref.
+    const existing = manifest.getContentAddress
+    if (!existing) throw new Error('saveManifest: root is clean but has no contentAddress')
+    const manifestReference = bytesToHex(existing)
+    log(`manifest saved: ${manifestReference} (0 dirty / ${totalChunks} total chunks in 0 ms)`)
+    return manifestReference
+  }
+
+  const readyLen = (): number => ready.length - readyHead
+  let dispatchedCount = 0
+  const heartbeat = setInterval(() => {
+    if (Date.now() - lastLoggedAt < 2000) return
+    const elapsed = Date.now() - saveStartedAt
+    if (uploadedCount === 0) {
+      log(
+        `  ...waiting on first upload (${elapsed} ms elapsed, ${dispatchedCount} in flight, ${readyLen()} queued)`,
+      )
+    } else {
+      const rate = ((uploadedCount / Math.max(1, elapsed)) * 1000).toFixed(0)
+      log(
+        `  ...still saving (${uploadedCount}/${dirtyCount} uploaded, ${rate} chunks/s, ${dispatchedCount - uploadedCount} in flight, ${readyLen()} queued)`,
+      )
+    }
+  }, 2000)
+  heartbeat.unref?.()
+
+  const tick = (): void => {
+    const uploaded = ++uploadedCount
+    const now = Date.now()
+    if (uploaded === 1 || uploaded === dirtyCount || now - lastLoggedAt >= 500) {
+      const elapsed = Math.max(1, now - saveStartedAt)
+      const rate = ((uploaded / elapsed) * 1000).toFixed(0)
+      log(`manifest chunks uploaded: ${uploaded}/${dirtyCount} dirty (${rate} chunks/s)`)
+      lastLoggedAt = now
+    }
+  }
+
+  // Phase 2: drain the ready queue with bounded concurrency. When a node's
+  // upload completes, decrement its parent's remaining count; parent becomes
+  // ready when it hits 0. Post-order is enforced by this dependency.
+  const maxInFlight = concurrency
+  let inFlight = 0
+  let rootRef: Reference | null = null
+
+  let manifestReference: string
+  try {
+    await new Promise<void>((resolveAll, rejectAll) => {
+      let failed = false
+
+      const startNext = (): void => {
+        while (!failed && inFlight < maxInFlight && readyHead < ready.length) {
+          const node = ready[readyHead++]
+          inFlight++
+          dispatchedCount++
+          processNode(node).catch((err: unknown) => {
+            // Decrement inFlight even on failure so the queue can drain any
+            // siblings cleanly when we reject.
+            inFlight--
+            if (failed) return
+            failed = true
+            log(`  !! processNode rejected: ${(err as Error)?.message ?? String(err)}`)
+            rejectAll(err instanceof Error ? err : new Error(String(err)))
+          })
+        }
+        if (!failed && inFlight === 0 && readyHead >= ready.length) {
+          resolveAll()
+        }
+      }
+
+      const processNode = async (node: MantarayNodeInstance): Promise<void> => {
+        const data = node.serialize()
+        const ref = await uploadFn(data)
+        node.setContentAddress = ref
+        if (node === manifest) rootRef = ref
+        tick()
+        const parent = parents.get(node)
+        if (parent) {
+          const rem = (remaining.get(parent) ?? 0) - 1
+          remaining.set(parent, rem)
+          if (rem === 0) ready.push(parent)
+        }
+        inFlight--
+        startNext()
+      }
+
+      startNext()
+    })
+  } finally {
+    clearInterval(heartbeat)
+  }
+
+  if (!rootRef) {
+    const addr = manifest.getContentAddress
+    if (!addr) throw new Error('saveManifest: root was not uploaded')
+    rootRef = addr
+  }
+  manifestReference = bytesToHex(rootRef)
+
+  const saveElapsed = Date.now() - saveStartedAt
+  log(
+    `manifest saved: ${manifestReference} (${uploadedCount} dirty / ${totalChunks} total chunks in ${saveElapsed} ms)`,
+  )
+
+  if (cacheEnabled && options.writeTreeSnapshot !== false) {
+    const snapStartedAt = Date.now()
     try {
       const chunks = await collectTreeChunks(manifest)
       const bytes = await writeSnapshot(manifestReference, chunks)
       await pruneOldSnapshots(manifestReference)
-      log(`snapshot written: ${chunks.size} chunks, ${bytes} bytes`)
+      log(
+        `snapshot written: ${chunks.size} chunks, ${bytes} bytes (${Date.now() - snapStartedAt} ms)`,
+      )
     } catch (err) {
       log(`snapshot skipped: ${(err as Error).message}`)
     }
@@ -383,43 +585,6 @@ function countMantarayNodes(node: MantarayNodeInstance): number {
     count += countMantarayNodes(fork.node)
   }
   return count
-}
-
-/**
- * Create a concurrent upload queue with a sliding window.
- *
- * This prevents overwhelming the Bee node with too many parallel requests
- * while still maximizing throughput within the concurrency limit.
- */
-function createUploadQueue(
-  maxConcurrent: number,
-  totalChunks: number,
-  uploadFn: (data: Uint8Array) => Promise<Reference>,
-  onProgress: (uploaded: number, total: number) => void,
-): (data: Uint8Array) => Promise<Reference> {
-  let inFlight = 0
-  let uploaded = 0
-  const waiting: Array<{ resolve: () => void }> = []
-
-  return async (data: Uint8Array): Promise<Reference> => {
-    // Wait for a slot if at capacity
-    while (inFlight >= maxConcurrent) {
-      await new Promise<void>((resolve) => waiting.push({ resolve }))
-    }
-
-    inFlight++
-    try {
-      const ref = await uploadFn(data)
-      uploaded++
-      onProgress(uploaded, totalChunks)
-      return ref
-    } finally {
-      inFlight--
-      // Release next waiting upload
-      const next = waiting.shift()
-      if (next) next.resolve()
-    }
-  }
 }
 
 /**

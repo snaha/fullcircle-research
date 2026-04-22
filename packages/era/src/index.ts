@@ -1,11 +1,13 @@
 export {
   ERAE_TYPE,
   fetchEraeFile,
+  openEraeFile,
   parseEraeFile,
   buildEraeIndex,
   type EraeBlock,
   type EraeFile,
   type EraeIndex,
+  type EraeReader,
 } from './erae.js'
 
 export {

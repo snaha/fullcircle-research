@@ -1,8 +1,9 @@
-import { existsSync, statSync } from 'node:fs'
+import { once } from 'node:events'
+import { createWriteStream, existsSync, statSync, type WriteStream } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { fetchEraeFile, parseEraeFile, type EraeBlock, type EraeFile } from './erae.js'
+import { fetchEraeFile, openEraeFile, type EraeBlock, type EraeReader } from './erae.js'
 
 export const BASE_URL = 'https://data.ethpandaops.io/erae/mainnet'
 export const CHECKSUMS_URL = `${BASE_URL}/checksums_sha256.txt`
@@ -96,18 +97,77 @@ export async function processTarget(t: Target): Promise<void> {
   )
 
   const t1 = Date.now()
-  const file = parseEraeFile(bytes)
-  const txTotal = file.blocks.reduce((n, b) => n + b.txHashes.length, 0)
+  const reader = openEraeFile(bytes)
   console.log(
-    `parse  version=0x${file.version.toString(16)} start=${file.startingBlock} count=${file.blockCount} txs=${txTotal} in ${Date.now() - t1} ms`,
+    `open   version=0x${reader.version.toString(16)} start=${reader.startingBlock} count=${reader.blockCount} in ${Date.now() - t1} ms`,
   )
 
-  await writeSummary(t.summaryPath, t.url, file)
-  await writeBlocksNdjson(t.blocksPath, file)
-  await writeIndex(t.indexPath, file)
+  // Stream one block at a time: decompress → serialize → append → free. Holding
+  // all decoded blocks at once OOMs on full eras (~2M txs, GBs of raw bytes).
+  const t2 = Date.now()
+  const blocksStream = createWriteStream(t.blocksPath)
+  const indexStream = createWriteStream(t.indexPath)
+
+  let firstBlock: EraeBlockSummary | null = null
+  let lastBlock: EraeBlockSummary | null = null
+  let totalTxs = 0
+
+  try {
+    for (const block of reader.blocks()) {
+      await writeLine(blocksStream, blockToJson(block))
+      const number = block.number.toString()
+      const blockHash = `0x${hex(block.hash)}`
+      await writeLine(indexStream, JSON.stringify({ kind: 'block', number, hash: blockHash }))
+      for (let i = 0; i < block.txHashes.length; i++) {
+        await writeLine(
+          indexStream,
+          JSON.stringify({
+            kind: 'tx',
+            hash: `0x${hex(block.txHashes[i])}`,
+            blockNumber: number,
+            txIndex: i,
+          }),
+        )
+      }
+
+      const summary: EraeBlockSummary = {
+        number,
+        hash: blockHash,
+        txCount: block.txHashes.length,
+      }
+      if (!firstBlock) firstBlock = summary
+      lastBlock = summary
+      totalTxs += block.txHashes.length
+    }
+  } finally {
+    await closeStream(blocksStream)
+    await closeStream(indexStream)
+  }
+
+  if (!firstBlock || !lastBlock) {
+    throw new Error(`processTarget: no blocks decoded from ${basename(t.eraePath)}`)
+  }
+  console.log(`stream txs=${totalTxs} in ${Date.now() - t2} ms`)
+
+  await writeSummary(t.summaryPath, t.url, reader, firstBlock, lastBlock, totalTxs)
   console.log(
     `write  summary=${fmtBytes(statSync(t.summaryPath).size)}  blocks=${fmtBytes(statSync(t.blocksPath).size)}  index=${fmtBytes(statSync(t.indexPath).size)}`,
   )
+}
+
+interface EraeBlockSummary {
+  number: string
+  hash: string
+  txCount: number
+}
+
+async function writeLine(stream: WriteStream, line: string): Promise<void> {
+  if (!stream.write(line + '\n')) await once(stream, 'drain')
+}
+
+async function closeStream(stream: WriteStream): Promise<void> {
+  stream.end()
+  await once(stream, 'finish')
 }
 
 // ---------- checksums ----------
@@ -158,34 +218,25 @@ function hex(b: Uint8Array): string {
 
 // ---------- writers ----------
 
-async function writeSummary(path: string, sourceUrl: string, f: EraeFile): Promise<void> {
-  const first = f.blocks[0]
-  const last = f.blocks[f.blocks.length - 1]
+async function writeSummary(
+  path: string,
+  sourceUrl: string,
+  reader: EraeReader,
+  firstBlock: EraeBlockSummary,
+  lastBlock: EraeBlockSummary,
+  totalTxs: number,
+): Promise<void> {
   const body = {
     sourceUrl,
-    version: `0x${f.version.toString(16)}`,
-    startingBlock: f.startingBlock.toString(),
-    blockCount: f.blockCount,
-    accumulatorRoot: f.accumulatorRoot ? `0x${hex(f.accumulatorRoot)}` : null,
-    firstBlock: {
-      number: first.number.toString(),
-      hash: `0x${hex(first.hash)}`,
-      txCount: first.txHashes.length,
-    },
-    lastBlock: {
-      number: last.number.toString(),
-      hash: `0x${hex(last.hash)}`,
-      txCount: last.txHashes.length,
-    },
-    totalTxs: f.blocks.reduce((n, b) => n + b.txHashes.length, 0),
+    version: `0x${reader.version.toString(16)}`,
+    startingBlock: reader.startingBlock.toString(),
+    blockCount: reader.blockCount,
+    accumulatorRoot: reader.accumulatorRoot ? `0x${hex(reader.accumulatorRoot)}` : null,
+    firstBlock,
+    lastBlock,
+    totalTxs,
   }
   await writeFile(path, JSON.stringify(body, null, 2))
-}
-
-async function writeBlocksNdjson(path: string, f: EraeFile): Promise<void> {
-  const lines: string[] = new Array(f.blocks.length)
-  for (let i = 0; i < f.blocks.length; i++) lines[i] = blockToJson(f.blocks[i])
-  await writeFile(path, lines.join('\n') + '\n')
 }
 
 function blockToJson(b: EraeBlock): string {
@@ -201,25 +252,3 @@ function blockToJson(b: EraeBlock): string {
   })
 }
 
-// Records are emitted interleaved in block order so an RPC tailer can just
-// append new lines (one "block" + one "tx" per transaction) without
-// rewriting. A consumer builds lookup maps by scanning the whole file once.
-async function writeIndex(path: string, f: EraeFile): Promise<void> {
-  const lines: string[] = []
-  for (const b of f.blocks) {
-    const number = b.number.toString()
-    const blockHash = `0x${hex(b.hash)}`
-    lines.push(JSON.stringify({ kind: 'block', number, hash: blockHash }))
-    for (let i = 0; i < b.txHashes.length; i++) {
-      lines.push(
-        JSON.stringify({
-          kind: 'tx',
-          hash: `0x${hex(b.txHashes[i])}`,
-          blockNumber: number,
-          txIndex: i,
-        }),
-      )
-    }
-  }
-  await writeFile(path, lines.join('\n') + '\n')
-}
