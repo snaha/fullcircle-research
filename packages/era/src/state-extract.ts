@@ -24,13 +24,7 @@ import { MerkleStateManager } from '@ethereumjs/statemanager'
 import type { Account, Address } from '@ethereumjs/util'
 import { createVM, runBlock } from '@ethereumjs/vm'
 
-import {
-  DATA_DIR,
-  downloadIfMissing,
-  fmtBytes,
-  resolveTargets,
-  type Target,
-} from './cli-shared.js'
+import { DATA_DIR, downloadIfMissing, fmtBytes, resolveTargets, type Target } from './cli-shared.js'
 import { parseEraeFile } from './erae.js'
 
 interface BalanceEvent {

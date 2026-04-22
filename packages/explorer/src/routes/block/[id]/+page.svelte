@@ -125,7 +125,9 @@
           <dd class="font-mono">{block.body.transactions.length}</dd>
 
           <dt class="text-muted-foreground">Miner</dt>
-          <dd class="break-all font-mono">{h.miner}</dd>
+          <dd class="break-all font-mono">
+            <a href="/address/{h.miner}" class="underline hover:no-underline">{h.miner}</a>
+          </dd>
 
           <dt class="text-muted-foreground">Gas used / limit</dt>
           <dd class="font-mono">
@@ -286,14 +288,18 @@
                       {#if tx.from === null}
                         <span class="text-muted-foreground">—</span>
                       {:else}
-                        {shortHash(tx.from, 10, 6)}
+                        <a href="/address/{tx.from}" class="underline hover:no-underline"
+                          >{shortHash(tx.from, 10, 6)}</a
+                        >
                       {/if}
                     </td>
                     <td class="px-3 py-2 font-mono">
                       {#if tx.to === null}
                         <span class="text-muted-foreground">contract creation</span>
                       {:else}
-                        {shortHash(tx.to, 10, 6)}
+                        <a href="/address/{tx.to}" class="underline hover:no-underline"
+                          >{shortHash(tx.to, 10, 6)}</a
+                        >
                       {/if}
                     </td>
                     <td class="px-3 py-2 font-mono">{formatEth(tx.value)}</td>

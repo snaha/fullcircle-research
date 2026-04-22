@@ -565,10 +565,7 @@ export async function saveManifest(
   const upload = makeUploadFn(bee, options.batchId, options.chunkStream, cacheEnabled)
   const tracker = makeSaveProgressTracker(log)
 
-  const subSave = async (
-    label: string,
-    node: MantarayNodeInstance,
-  ): Promise<Reference | null> => {
+  const subSave = async (label: string, node: MantarayNodeInstance): Promise<Reference | null> => {
     if (!hasAnyFork(node) && !node.getEntry) {
       log(`[${label}] empty sub-manifest — skipping save`)
       return null

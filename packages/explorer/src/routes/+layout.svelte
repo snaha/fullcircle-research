@@ -50,7 +50,11 @@
       goto(`/lookup/${hex}`)
       return
     }
-    alert('Enter a block number, block hash, or transaction hash.')
+    if (/^0x[0-9a-f]{40}$/.test(hex)) {
+      goto(`/address/${hex}`)
+      return
+    }
+    alert('Enter a block number, block hash, tx hash, or address.')
   }
 </script>
 
@@ -75,7 +79,7 @@
           />
           <Input
             type="text"
-            placeholder="Block # / block hash / tx hash"
+            placeholder="Block # / block hash / tx hash / address"
             class="pl-8 font-mono"
             bind:value={query}
             autocomplete="off"

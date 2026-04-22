@@ -147,6 +147,13 @@
                 <span class="text-muted-foreground">loading…</span>
               {/if}
             </dd>
+            {#if meta && meta.addressCount !== '0'}
+              <dt class="text-muted-foreground">Addresses</dt>
+              <dd class="font-mono">
+                {formatBlock(meta.addressCount)}
+                <span class="text-muted-foreground">({formatBlock(meta.eventCount)} events)</span>
+              </dd>
+            {/if}
           </dl>
         {:else}
           <p class="text-sm text-muted-foreground">
@@ -198,6 +205,14 @@
               Transaction detail pages (<code class="rounded bg-muted px-1 font-mono text-xs"
                 >/tx/&lt;hash&gt;</code
               >) with value, gas, and input data.
+            </span>
+          </li>
+          <li class="flex items-start gap-2">
+            <span class="mt-1 size-1.5 rounded-full bg-primary"></span>
+            <span>
+              Address pages (<code class="rounded bg-muted px-1 font-mono text-xs"
+                >/address/&lt;addr&gt;</code
+              >) with current balance and full balance-change history.
             </span>
           </li>
         </ul>

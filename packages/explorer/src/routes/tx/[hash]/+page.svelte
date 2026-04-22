@@ -158,7 +158,7 @@
             {#if tx.from === null}
               <span class="text-muted-foreground">(recovery failed)</span>
             {:else}
-              {tx.from}
+              <a href="/address/{tx.from}" class="underline hover:no-underline">{tx.from}</a>
             {/if}
           </dd>
 
@@ -167,7 +167,7 @@
             {#if tx.to === null}
               <span class="text-muted-foreground">contract creation</span>
             {:else}
-              {tx.to}
+              <a href="/address/{tx.to}" class="underline hover:no-underline">{tx.to}</a>
             {/if}
           </dd>
 
