@@ -75,18 +75,21 @@ export class BeeChunkStream {
 
     const ackTimeoutMs = this.opts.ackTimeoutMs ?? 30_000
     if (ackTimeoutMs > 0) {
-      this.watchdog = setInterval(() => {
-        const oldest = this.pending[0]
-        if (!oldest) return
-        const waited = Date.now() - oldest.sentAt
-        if (waited > ackTimeoutMs) {
-          this.fail(
-            new Error(
-              `chunk stream stalled: no ack for ${waited} ms on oldest pending chunk (${this.pending.length} pending)`,
-            ),
-          )
-        }
-      }, Math.min(5_000, Math.max(1_000, ackTimeoutMs / 6)))
+      this.watchdog = setInterval(
+        () => {
+          const oldest = this.pending[0]
+          if (!oldest) return
+          const waited = Date.now() - oldest.sentAt
+          if (waited > ackTimeoutMs) {
+            this.fail(
+              new Error(
+                `chunk stream stalled: no ack for ${waited} ms on oldest pending chunk (${this.pending.length} pending)`,
+              ),
+            )
+          }
+        },
+        Math.min(5_000, Math.max(1_000, ackTimeoutMs / 6)),
+      )
       this.watchdog.unref?.()
     }
   }

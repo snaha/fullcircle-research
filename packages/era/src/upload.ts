@@ -179,7 +179,7 @@ if (args.ws) {
   await timed('open ws /chunks/stream', () => chunkStream!.open())
 }
 
-async function saveManifestNow(label: string, writeTreeSnapshot: boolean): Promise<string> {
+async function saveManifestNow(label: string, writeTreeSnapshot: boolean) {
   return saveManifest(bee, manifest, {
     batchId,
     onProgress: (msg) => console.log(`       [${label}] ${msg}`),
@@ -200,16 +200,20 @@ for (const t of uploadable) {
           every: args.saveEvery,
           fn: async (processed: number, lastBlockNumber: string) => {
             const checkpointStarted = Date.now()
-            console.log(
-              `\n       ── checkpoint ${processed} blocks (last=${lastBlockNumber}) ──`,
-            )
+            console.log(`\n       ── checkpoint ${processed} blocks (last=${lastBlockNumber}) ──`)
             // Skip the snapshot rewrite here: it walks the whole tree and
             // pays O(total-chunks) disk I/O per checkpoint. Recovery from the
             // previous snapshot + the intermediate manifest ref is good
             // enough; the final save at end-of-run refreshes the snapshot.
-            const ref = await saveManifestNow(`checkpoint ${processed}`, false)
+            const refs = await saveManifestNow(`checkpoint ${processed}`, false)
             const payload = {
-              manifestReference: ref,
+              manifestReference: refs.root,
+              subManifests: {
+                number: refs.numberManifest,
+                hash: refs.hashManifest,
+                tx: refs.txManifest,
+              },
+              meta: refs.meta,
               blocksProcessed: processed,
               lastBlockNumber,
               file: t.fileBase,
@@ -220,8 +224,8 @@ for (const t of uploadable) {
             await writeFile(progressPath, JSON.stringify(payload, null, 2))
             console.log(
               `       ✓ checkpoint ${processed} saved in ${Date.now() - checkpointStarted} ms\n` +
-                `         manifest: ${ref}\n` +
-                `         resume:   pnpm era:upload --batch-id ${batchId} --manifest ${ref} ...\n` +
+                `         manifest: ${refs.root}\n` +
+                `         resume:   pnpm era:upload --batch-id ${batchId} --manifest ${refs.root} ...\n` +
                 `         progress: ${progressPath}`,
             )
           },
@@ -249,7 +253,7 @@ const meta = await timed('write /meta', () =>
   }),
 )
 
-const manifestReference = await timed('save manifest', () =>
+const refs = await timed('save manifest', () =>
   saveManifest(bee, manifest, {
     batchId,
     onProgress: (msg) => console.log(`       ${msg}`),
@@ -288,7 +292,13 @@ const manifestData = {
   beeUrl,
   batchId,
   extendedFrom: args.manifestHash ?? null,
-  manifestReference,
+  manifestReference: refs.root,
+  subManifests: {
+    number: refs.numberManifest,
+    hash: refs.hashManifest,
+    tx: refs.txManifest,
+  },
+  meta: refs.meta,
   firstBlock: meta?.firstBlock ?? null,
   lastBlock: meta?.lastBlock ?? null,
   blocksUploaded: totals.blocksUploaded,
@@ -299,5 +309,8 @@ await writeFile(manifestPath, JSON.stringify(manifestData, null, 2))
 console.log(
   `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${formatDuration(elapsed)}`,
 )
-console.log(`       manifest: ${manifestReference}`)
+console.log(`       manifest: ${refs.root}`)
+console.log(`       number:   ${refs.numberManifest}`)
+console.log(`       hash:     ${refs.hashManifest}`)
+console.log(`       tx:       ${refs.txManifest}`)
 console.log(`       written:  ${manifestPath}`)

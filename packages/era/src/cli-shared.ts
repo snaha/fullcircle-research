@@ -251,4 +251,3 @@ function blockToJson(b: EraeBlock): string {
     proof: b.proof ? `0x${hex(b.proof)}` : null,
   })
 }
-
