@@ -19,6 +19,8 @@
   let potByHashInput = $state(settings.potByHash)
   let potByTxInput = $state(settings.potByTx)
   let potMetaInput = $state(settings.potMeta)
+  let sqliteDbRefInput = $state(settings.sqliteDbRef)
+  let sqliteMetaInput = $state(settings.sqliteMeta)
   let settingsOpen = $state(!hasSource())
 
   function submitSettings(e: SubmitEvent) {
@@ -31,6 +33,8 @@
       potByHash: potByHashInput,
       potByTx: potByTxInput,
       potMeta: potMetaInput,
+      sqliteDbRef: sqliteDbRefInput,
+      sqliteMeta: sqliteMetaInput,
     })
     settingsOpen = false
   }
@@ -133,7 +137,7 @@
 
         <div class="flex flex-col gap-2">
           <Label>Index type</Label>
-          <div class="flex gap-4 text-sm">
+          <div class="flex flex-wrap gap-4 text-sm">
             <label class="flex items-center gap-2">
               <input
                 type="radio"
@@ -154,6 +158,16 @@
               />
               <span>POT indexes</span>
             </label>
+            <label class="flex items-center gap-2">
+              <input
+                type="radio"
+                name="source"
+                value="sqlite"
+                checked={sourceInput === 'sqlite'}
+                onchange={() => (sourceInput = 'sqlite')}
+              />
+              <span>SQLite index</span>
+            </label>
           </div>
         </div>
 
@@ -168,6 +182,41 @@
               spellcheck="false"
               class="font-mono"
             />
+          </div>
+        {:else if sourceInput === 'sqlite'}
+          <div class="flex flex-col gap-3 rounded-md border p-3">
+            <p class="text-xs text-muted-foreground">
+              Paste the database ref printed by <code class="font-mono">pnpm era:upload-sqlite</code
+              >
+              (or read from <code class="font-mono">eras-*.sqlite-index.json</code>).
+            </p>
+            <div class="flex flex-col gap-2">
+              <Label for="sqlite-db-ref">dbRef</Label>
+              <Input
+                id="sqlite-db-ref"
+                type="text"
+                bind:value={sqliteDbRefInput}
+                placeholder="64-character hex"
+                spellcheck="false"
+                class="font-mono"
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label for="sqlite-meta"
+                >meta <span class="text-muted-foreground">(optional)</span></Label
+              >
+              <Input
+                id="sqlite-meta"
+                type="text"
+                bind:value={sqliteMetaInput}
+                placeholder="64-character hex"
+                spellcheck="false"
+                class="font-mono"
+              />
+            </div>
+            <p class="text-xs text-muted-foreground">
+              Queries use HTTP Range requests to fetch only the needed database pages.
+            </p>
           </div>
         {:else}
           <div class="flex flex-col gap-3 rounded-md border p-3">

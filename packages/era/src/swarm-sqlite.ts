@@ -15,7 +15,7 @@
 
 import * as crypto from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { open, readFile, writeFile } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import Database from 'better-sqlite3'
 import { Bee } from '@ethersphere/bee-js'
@@ -213,6 +213,18 @@ export class SqliteIndexer {
         content_hash BLOB PRIMARY KEY,
         bmt_hash BLOB NOT NULL
       );
+
+      -- Track uploaded pages: BMT hash → Swarm reference
+      CREATE TABLE IF NOT EXISTS uploaded_pages (
+        bmt_hash BLOB PRIMARY KEY,
+        swarm_ref TEXT NOT NULL
+      );
+
+      -- Track last synced content hash per page number
+      CREATE TABLE IF NOT EXISTS synced_pages (
+        page_num INTEGER PRIMARY KEY,
+        content_hash BLOB NOT NULL
+      );
     `)
     // Cache prepared statements (avoids SQL parsing on each lookup/store)
     this.bmtCacheLookupStmt = this.bmtCacheDb.prepare(
@@ -221,6 +233,28 @@ export class SqliteIndexer {
     this.bmtCacheStoreStmt = this.bmtCacheDb.prepare(
       'INSERT OR IGNORE INTO bmt_cache (content_hash, bmt_hash) VALUES (?, ?)',
     )
+
+    // Load existing uploaded pages into memory map
+    const uploadedRows = this.bmtCacheDb
+      .prepare('SELECT bmt_hash, swarm_ref FROM uploaded_pages')
+      .all() as Array<{ bmt_hash: Buffer; swarm_ref: string }>
+    for (const row of uploadedRows) {
+      this.uploadedPages.set(bytesToHex(new Uint8Array(row.bmt_hash)), row.swarm_ref)
+    }
+
+    // Load existing synced page hashes into memory map
+    const syncedRows = this.bmtCacheDb
+      .prepare('SELECT page_num, content_hash FROM synced_pages')
+      .all() as Array<{ page_num: number; content_hash: Buffer }>
+    for (const row of syncedRows) {
+      this.lastSyncedContentHashes.set(row.page_num, row.content_hash)
+    }
+
+    if (this.uploadedPages.size > 0 || this.lastSyncedContentHashes.size > 0) {
+      this.log(
+        `loaded state: ${this.uploadedPages.size} uploaded pages, ${this.lastSyncedContentHashes.size} synced pages`,
+      )
+    }
   }
 
   /**
@@ -514,6 +548,10 @@ export class SqliteIndexer {
         // Content already uploaded, just update table and tracking
         newPageTable.push({ page: pageNum, ref: existingRef })
         this.lastSyncedContentHashes.set(pageNum, contentHash)
+        // Persist synced page to SQLite
+        this.bmtCacheDb
+          .prepare('INSERT OR REPLACE INTO synced_pages (page_num, content_hash) VALUES (?, ?)')
+          .run(pageNum, contentHash)
       } else {
         // Need to upload this page (copy data since buffer is reused)
         pagesToUpload.push({
@@ -538,6 +576,14 @@ export class SqliteIndexer {
     let pagesUploaded = 0
     const uploadQueue = createUploadQueue(concurrency, pagesToUpload.length, log)
 
+    // Prepare statements for persisting state (outside the concurrent uploads)
+    const insertUploadedPage = this.bmtCacheDb.prepare(
+      'INSERT OR REPLACE INTO uploaded_pages (bmt_hash, swarm_ref) VALUES (?, ?)',
+    )
+    const insertSyncedPage = this.bmtCacheDb.prepare(
+      'INSERT OR REPLACE INTO synced_pages (page_num, content_hash) VALUES (?, ?)',
+    )
+
     await uploadQueue(pagesToUpload, async (page) => {
       // Build chunk data: span (8 bytes) + payload
       const span = new Uint8Array(8)
@@ -555,6 +601,10 @@ export class SqliteIndexer {
       // Track content hash for fast change detection
       this.lastSyncedContentHashes.set(page.pageNum, page.contentHash)
       newPageTable.push({ page: page.pageNum, ref: swarmRef })
+
+      // Persist to SQLite
+      insertUploadedPage.run(page.bmtHash, swarmRef)
+      insertSyncedPage.run(page.pageNum, page.contentHash)
 
       pagesUploaded++
     })
@@ -617,52 +667,6 @@ export class SqliteIndexer {
   close(): void {
     this.db.close()
     this.bmtCacheDb.close()
-  }
-
-  /**
-   * Save page tracking state to disk for persistence across restarts.
-   * Content hashes are serialized as hex strings.
-   */
-  async saveState(statePath: string): Promise<void> {
-    // Convert Buffer content hashes to hex for JSON serialization
-    const contentHashEntries = Array.from(this.lastSyncedContentHashes.entries()).map(
-      ([pageNum, hash]) => [pageNum, hash.toString('hex')] as [number, string],
-    )
-
-    const state = {
-      version: 2, // New format with content hashes
-      uploadedPages: Array.from(this.uploadedPages.entries()),
-      lastSyncedContentHashes: contentHashEntries,
-    }
-    await writeFile(statePath, JSON.stringify(state))
-  }
-
-  /**
-   * Load page tracking state from disk.
-   * Handles both v1 (BMT hashes) and v2 (content hashes) formats.
-   */
-  async loadState(statePath: string): Promise<void> {
-    try {
-      const data = await readFile(statePath, 'utf8')
-      const state = JSON.parse(data)
-      this.uploadedPages = new Map(state.uploadedPages)
-
-      if (state.version === 2 && state.lastSyncedContentHashes) {
-        // v2 format: content hashes stored as hex strings
-        this.lastSyncedContentHashes = new Map(
-          state.lastSyncedContentHashes.map(
-            ([pageNum, hexHash]: [number, string]) =>
-              [pageNum, Buffer.from(hexHash, 'hex')] as [number, Buffer],
-          ),
-        )
-      } else if (state.lastSyncedPageHashes) {
-        // v1 format: BMT hashes - cannot convert, need to rescan
-        // Leave lastSyncedContentHashes empty to trigger full rescan
-        this.lastSyncedContentHashes = new Map()
-      }
-    } catch {
-      // File doesn't exist or is invalid, start fresh
-    }
   }
 }
 

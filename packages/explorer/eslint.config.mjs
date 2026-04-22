@@ -60,6 +60,8 @@ export default typescriptEslint.config(
       '**/.cache',
       // Vendored POT JS browser runtime (Go wasm_exec.js + pot-web-init.js).
       'static/pot-web.js',
+      // Vendored sql.js-httpvfs assets.
+      'static/sql.js-httpvfs/**',
     ],
   },
 )

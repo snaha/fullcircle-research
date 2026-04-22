@@ -1,15 +1,18 @@
 // Bee gateway URL + data source selection. Persisted in localStorage so the
 // explorer remembers which source to query across reloads.
 //
-// Two sources are supported:
+// Three sources are supported:
 //   manifest — Mantaray manifest ref; data served via `/bzz/{ref}/...`.
 //   pot      — four POT refs (byNumber / byHash / byTx / meta); bundle bytes
 //              are resolved through POT key-value lookups, then fetched from
 //              `/bytes/{ref}`.
+//   sqlite   — SQLite database synced to Swarm as 4KB page chunks; lookups use
+//              sql.js (SQLite WASM) to query the database, fetching pages
+//              on-demand from Swarm.
 
 import { browser } from '$app/environment'
 
-export type Source = 'manifest' | 'pot'
+export type Source = 'manifest' | 'pot' | 'sqlite'
 
 const KEY_BEE = 'fullcircle.explorer.beeUrl'
 const KEY_SOURCE = 'fullcircle.explorer.source'
@@ -18,6 +21,8 @@ const KEY_POT_BY_NUMBER = 'fullcircle.explorer.pot.byNumber'
 const KEY_POT_BY_HASH = 'fullcircle.explorer.pot.byHash'
 const KEY_POT_BY_TX = 'fullcircle.explorer.pot.byTx'
 const KEY_POT_META = 'fullcircle.explorer.pot.meta'
+const KEY_SQLITE_DB_REF = 'fullcircle.explorer.sqlite.dbRef'
+const KEY_SQLITE_META = 'fullcircle.explorer.sqlite.meta'
 
 const DEFAULT_BEE = 'http://localhost:1633'
 const HEX64 = /^[0-9a-f]{64}$/
@@ -30,7 +35,9 @@ function load(key: string, fallback: string): string {
 
 function loadSource(): Source {
   const raw = load(KEY_SOURCE, 'manifest')
-  return raw === 'pot' ? 'pot' : 'manifest'
+  if (raw === 'pot') return 'pot'
+  if (raw === 'sqlite') return 'sqlite'
+  return 'manifest'
 }
 
 export const settings = $state({
@@ -41,6 +48,8 @@ export const settings = $state({
   potByHash: load(KEY_POT_BY_HASH, ''),
   potByTx: load(KEY_POT_BY_TX, ''),
   potMeta: load(KEY_POT_META, ''),
+  sqliteDbRef: load(KEY_SQLITE_DB_REF, ''),
+  sqliteMeta: load(KEY_SQLITE_META, ''),
 })
 
 export interface SaveArgs {
@@ -51,6 +60,8 @@ export interface SaveArgs {
   potByHash: string
   potByTx: string
   potMeta: string
+  sqliteDbRef: string
+  sqliteMeta: string
 }
 
 export function saveSettings(args: SaveArgs): void {
@@ -61,6 +72,8 @@ export function saveSettings(args: SaveArgs): void {
   settings.potByHash = normHex(args.potByHash)
   settings.potByTx = normHex(args.potByTx)
   settings.potMeta = normHex(args.potMeta)
+  settings.sqliteDbRef = normHex(args.sqliteDbRef)
+  settings.sqliteMeta = normHex(args.sqliteMeta)
   if (browser) {
     localStorage.setItem(KEY_BEE, settings.beeUrl)
     localStorage.setItem(KEY_SOURCE, settings.source)
@@ -69,6 +82,8 @@ export function saveSettings(args: SaveArgs): void {
     localStorage.setItem(KEY_POT_BY_HASH, settings.potByHash)
     localStorage.setItem(KEY_POT_BY_TX, settings.potByTx)
     localStorage.setItem(KEY_POT_META, settings.potMeta)
+    localStorage.setItem(KEY_SQLITE_DB_REF, settings.sqliteDbRef)
+    localStorage.setItem(KEY_SQLITE_META, settings.sqliteMeta)
   }
 }
 
@@ -83,12 +98,14 @@ export function isHex64(s: string): boolean {
 /** True when the selected source has the minimum refs needed to serve blocks. */
 export function hasSource(): boolean {
   if (settings.source === 'manifest') return isHex64(settings.manifestRef)
+  if (settings.source === 'sqlite') return isHex64(settings.sqliteDbRef)
   return isHex64(settings.potByNumber) && isHex64(settings.potByHash)
 }
 
 /** True when tx-hash → block lookup is available on the selected source. */
 export function hasTxIndex(): boolean {
   if (settings.source === 'manifest') return isHex64(settings.manifestRef)
+  if (settings.source === 'sqlite') return isHex64(settings.sqliteDbRef)
   return isHex64(settings.potByTx) && settings.potByTx !== ZERO_REF
 }
 
@@ -101,6 +118,9 @@ export function hasAddressIndex(): boolean {
 export function sourceLabel(): string {
   if (settings.source === 'manifest') {
     return `manifest · ${short(settings.manifestRef)}`
+  }
+  if (settings.source === 'sqlite') {
+    return `sqlite · ${short(settings.sqliteDbRef)}`
   }
   return `pot · ${short(settings.potByNumber)}`
 }
