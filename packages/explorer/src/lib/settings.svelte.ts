@@ -3,15 +3,17 @@
 //
 // Three sources are supported:
 //   manifest — Mantaray manifest ref; data served via `/bzz/{ref}/...`.
-//   pot      — four POT refs (byNumber / byHash / byTx / meta); bundle bytes
-//              are resolved through POT key-value lookups, then fetched from
-//              `/bytes/{ref}`.
+//   pot      — six POT refs (byNumber / byHash / byTx / byAddress /
+//              byBalanceBlock / meta); bundle, account, and balance-events
+//              bytes are resolved through POT key-value lookups, then fetched
+//              from `/bytes/{ref}`. A single envelope ref can hydrate all of
+//              them — see `hydratePotFromEnvelope`.
 //   sqlite   — SQLite database synced to Swarm as 4KB page chunks; lookups use
 //              sql.js (SQLite WASM) to query the database, fetching pages
 //              on-demand from Swarm.
 
 import { browser } from '$app/environment'
-import { resolveLatest } from './feed-resolver'
+import { fetchPotEnvelope, resolveLatest } from './feed-resolver'
 
 export type Source = 'manifest' | 'pot' | 'sqlite'
 
@@ -22,6 +24,8 @@ const KEY_MANIFEST = 'fullcircle.explorer.manifestRef'
 const KEY_POT_BY_NUMBER = 'fullcircle.explorer.pot.byNumber'
 const KEY_POT_BY_HASH = 'fullcircle.explorer.pot.byHash'
 const KEY_POT_BY_TX = 'fullcircle.explorer.pot.byTx'
+const KEY_POT_BY_ADDRESS = 'fullcircle.explorer.pot.byAddress'
+const KEY_POT_BY_BALANCE_BLOCK = 'fullcircle.explorer.pot.byBalanceBlock'
 const KEY_POT_META = 'fullcircle.explorer.pot.meta'
 const KEY_SQLITE_DB_REF = 'fullcircle.explorer.sqlite.dbRef'
 const KEY_SQLITE_META = 'fullcircle.explorer.sqlite.meta'
@@ -51,6 +55,8 @@ export const settings = $state({
   potByNumber: load(KEY_POT_BY_NUMBER, ''),
   potByHash: load(KEY_POT_BY_HASH, ''),
   potByTx: load(KEY_POT_BY_TX, ''),
+  potByAddress: load(KEY_POT_BY_ADDRESS, ''),
+  potByBalanceBlock: load(KEY_POT_BY_BALANCE_BLOCK, ''),
   potMeta: load(KEY_POT_META, ''),
   sqliteDbRef: load(KEY_SQLITE_DB_REF, ''),
   sqliteMeta: load(KEY_SQLITE_META, ''),
@@ -64,6 +70,8 @@ export interface SaveArgs {
   potByNumber: string
   potByHash: string
   potByTx: string
+  potByAddress: string
+  potByBalanceBlock: string
   potMeta: string
   sqliteDbRef: string
   sqliteMeta: string
@@ -77,6 +85,8 @@ export function saveSettings(args: SaveArgs): void {
   settings.potByNumber = normHex(args.potByNumber)
   settings.potByHash = normHex(args.potByHash)
   settings.potByTx = normHex(args.potByTx)
+  settings.potByAddress = normHex(args.potByAddress)
+  settings.potByBalanceBlock = normHex(args.potByBalanceBlock)
   settings.potMeta = normHex(args.potMeta)
   settings.sqliteDbRef = normHex(args.sqliteDbRef)
   settings.sqliteMeta = normHex(args.sqliteMeta)
@@ -88,10 +98,34 @@ export function saveSettings(args: SaveArgs): void {
     localStorage.setItem(KEY_POT_BY_NUMBER, settings.potByNumber)
     localStorage.setItem(KEY_POT_BY_HASH, settings.potByHash)
     localStorage.setItem(KEY_POT_BY_TX, settings.potByTx)
+    localStorage.setItem(KEY_POT_BY_ADDRESS, settings.potByAddress)
+    localStorage.setItem(KEY_POT_BY_BALANCE_BLOCK, settings.potByBalanceBlock)
     localStorage.setItem(KEY_POT_META, settings.potMeta)
     localStorage.setItem(KEY_SQLITE_DB_REF, settings.sqliteDbRef)
     localStorage.setItem(KEY_SQLITE_META, settings.sqliteMeta)
   }
+}
+
+/**
+ * Hydrate every POT ref from a single envelope ref (the JSON bundle the
+ * uploader writes unconditionally at the end of `upload-pot`). Writes the
+ * resolved values straight into `settings` + localStorage so the user doesn't
+ * need to paste each ref individually.
+ */
+export async function hydratePotFromEnvelope(envelopeRef: string): Promise<void> {
+  const resolved = await fetchPotEnvelope(settings.beeUrl, envelopeRef)
+  settings.potByNumber = resolved.byNumber
+  settings.potByHash = resolved.byHash
+  settings.potByTx = resolved.byTx
+  settings.potByAddress = resolved.byAddress
+  settings.potByBalanceBlock = resolved.byBalanceBlock
+  settings.potMeta = resolved.meta ?? ''
+  updateRef(KEY_POT_BY_NUMBER, resolved.byNumber)
+  updateRef(KEY_POT_BY_HASH, resolved.byHash)
+  updateRef(KEY_POT_BY_TX, resolved.byTx)
+  updateRef(KEY_POT_BY_ADDRESS, resolved.byAddress)
+  updateRef(KEY_POT_BY_BALANCE_BLOCK, resolved.byBalanceBlock)
+  updateRef(KEY_POT_META, resolved.meta ?? '')
 }
 
 /**
@@ -121,10 +155,14 @@ export async function resolveActiveSourceFromFeed(): Promise<void> {
     settings.potByNumber = resolved.byNumber
     settings.potByHash = resolved.byHash
     settings.potByTx = resolved.byTx
+    settings.potByAddress = resolved.byAddress
+    settings.potByBalanceBlock = resolved.byBalanceBlock
     settings.potMeta = resolved.meta ?? ''
     updateRef(KEY_POT_BY_NUMBER, resolved.byNumber)
     updateRef(KEY_POT_BY_HASH, resolved.byHash)
     updateRef(KEY_POT_BY_TX, resolved.byTx)
+    updateRef(KEY_POT_BY_ADDRESS, resolved.byAddress)
+    updateRef(KEY_POT_BY_BALANCE_BLOCK, resolved.byBalanceBlock)
     updateRef(KEY_POT_META, resolved.meta ?? '')
   }
 }
@@ -160,9 +198,13 @@ export function hasTxIndex(): boolean {
   return isHex64(settings.potByTx) && settings.potByTx !== ZERO_REF
 }
 
-/** True when address → balance lookup is available. Manifest-only for now. */
+/** True when address → balance lookup is available. */
 export function hasAddressIndex(): boolean {
-  return settings.source === 'manifest' && isHex64(settings.manifestRef)
+  if (settings.source === 'manifest') return isHex64(settings.manifestRef)
+  if (settings.source === 'pot') {
+    return isHex64(settings.potByAddress) && settings.potByAddress !== ZERO_REF
+  }
+  return false
 }
 
 /** Short human label for the current source — used in the header badge. */

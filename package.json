@@ -20,6 +20,7 @@
     "demo:build": "pnpm --filter @fullcircle/demo run build",
     "explorer:dev": "pnpm --filter @fullcircle/explorer run dev",
     "explorer:build": "pnpm --filter @fullcircle/explorer run build",
+    "explorer:publish-to-swarm": "pnpm --filter @fullcircle/explorer run publish-to-swarm",
     "lint": "pnpm -r --if-present run lint",
     "format": "pnpm -r --if-present run format",
     "knip": "pnpm -r --if-present run knip",

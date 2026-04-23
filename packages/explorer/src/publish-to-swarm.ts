@@ -1,0 +1,97 @@
+// CLI: upload the built SvelteKit explorer to Swarm.
+//
+// Usage:
+//   pnpm publish-to-swarm --batch-id <postage-batch-id>
+//   pnpm publish-to-swarm --batch-id abc123... --bee-url http://localhost:1633
+//   pnpm publish-to-swarm --batch-id abc123... --build-dir ./build
+
+import { existsSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { Bee } from '@ethersphere/bee-js'
+
+const DATA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../data')
+const DEFAULT_BUILD_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../build')
+
+// ---------- Args ----------
+
+interface Args {
+  beeUrl: string
+  batchId?: string
+  buildDir: string
+}
+
+function parseArgs(argv: string[]): Args {
+  const result: Args = { beeUrl: 'http://localhost:1633', buildDir: DEFAULT_BUILD_DIR }
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--bee-url' && argv[i + 1]) result.beeUrl = argv[++i]
+    else if (arg === '--batch-id' && argv[i + 1]) result.batchId = argv[++i]
+    else if (arg === '--build-dir' && argv[i + 1]) result.buildDir = resolve(argv[++i])
+  }
+  return result
+}
+
+const args = parseArgs(process.argv)
+
+if (!args.batchId) {
+  console.error('error: --batch-id is required')
+  console.error('')
+  console.error('Usage:')
+  console.error('  pnpm publish-to-swarm --batch-id <postage-batch-id>')
+  console.error('  pnpm publish-to-swarm --batch-id abc123... --bee-url http://localhost:1633')
+  console.error('  pnpm publish-to-swarm --batch-id abc123... --build-dir ./build')
+  console.error('')
+  console.error('Run `pnpm build` first to produce the build/ directory.')
+  process.exit(1)
+}
+
+if (!existsSync(args.buildDir)) {
+  console.error(`error: build directory not found at ${args.buildDir}`)
+  console.error('Run `pnpm build` first.')
+  process.exit(1)
+}
+
+// ---------- Upload ----------
+
+const bee = new Bee(args.beeUrl)
+const batchId = args.batchId
+const started = Date.now()
+let lastPct = -1
+
+console.log(`uploading ${args.buildDir} → ${args.beeUrl}`)
+
+const result = await bee.streamDirectory(
+  batchId,
+  args.buildDir,
+  ({ total, processed }) => {
+    const pct = total > 0 ? Math.floor((processed / total) * 100) : 0
+    if (pct !== lastPct && pct % 5 === 0) {
+      process.stdout.write(`\r  ${processed}/${total} chunks (${pct}%)`)
+      lastPct = pct
+    }
+  },
+  { indexDocument: 'index.html', errorDocument: 'index.html' },
+)
+
+const elapsed = Date.now() - started
+const rootHex = result.reference.toHex()
+process.stdout.write('\n')
+
+// ---------- Output ----------
+
+const outputPath = resolve(DATA_DIR, `explorer-${Date.now()}.manifest.json`)
+const output = {
+  publishedAt: new Date().toISOString(),
+  beeUrl: args.beeUrl,
+  batchId,
+  buildDir: args.buildDir,
+  manifestReference: rootHex,
+}
+await writeFile(outputPath, JSON.stringify(output, null, 2))
+
+console.log(`\ndone in ${elapsed} ms`)
+console.log(`  manifest: ${rootHex}`)
+console.log(`  access:   ${args.beeUrl}/bzz/${rootHex}/`)
+console.log(`  written:  ${outputPath}`)

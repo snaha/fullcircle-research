@@ -6,7 +6,8 @@
 //   manifest → the Mantaray manifest root ref (self-contained)
 //   sqlite   → the SQLite Merkle-tree root ref (dbRef)
 //   pot      → ref of a small JSON envelope on Swarm that carries
-//              { byNumber, byHash, byTx, meta } — see `uploadPotEnvelope`
+//              { byNumber, byHash, byTx, byAddress, byBalanceBlock, meta }
+//              — see `uploadPotEnvelope`
 //
 // The signer is read from FULLCIRCLE_FEED_SIGNER_KEY or --feed-signer-key.
 // If neither is set, publishFeedUpdate prints a warning and returns null —
@@ -277,6 +278,8 @@ export interface PotFeedEnvelope {
   byNumber: string
   byHash: string
   byTx: string
+  byAddress: string
+  byBalanceBlock: string
   meta: string | null
 }
 

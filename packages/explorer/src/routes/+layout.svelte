@@ -9,6 +9,7 @@
   import { Label } from '$lib/components/ui/label'
   import {
     hasSource,
+    hydratePotFromEnvelope,
     isAddress,
     isHex64,
     resolveActiveSourceFromFeed,
@@ -29,7 +30,12 @@
   let potByNumberInput = $state(settings.potByNumber)
   let potByHashInput = $state(settings.potByHash)
   let potByTxInput = $state(settings.potByTx)
+  let potByAddressInput = $state(settings.potByAddress)
+  let potByBalanceBlockInput = $state(settings.potByBalanceBlock)
   let potMetaInput = $state(settings.potMeta)
+  let potEnvelopeInput = $state('')
+  let envelopeBusy = $state(false)
+  let envelopeError = $state('')
   let sqliteDbRefInput = $state(settings.sqliteDbRef)
   let sqliteMetaInput = $state(settings.sqliteMeta)
   let settingsOpen = $state(!hasSource())
@@ -70,6 +76,8 @@
       potByNumber: potByNumberInput,
       potByHash: potByHashInput,
       potByTx: potByTxInput,
+      potByAddress: potByAddressInput,
+      potByBalanceBlock: potByBalanceBlockInput,
       potMeta: potMetaInput,
       sqliteDbRef: sqliteDbRefInput,
       sqliteMeta: sqliteMetaInput,
@@ -92,6 +100,8 @@
         potByNumberInput = settings.potByNumber
         potByHashInput = settings.potByHash
         potByTxInput = settings.potByTx
+        potByAddressInput = settings.potByAddress
+        potByBalanceBlockInput = settings.potByBalanceBlock
         potMetaInput = settings.potMeta
         sqliteDbRefInput = settings.sqliteDbRef
         sqliteMetaInput = settings.sqliteMeta
@@ -104,6 +114,32 @@
     }
 
     settingsOpen = false
+  }
+
+  async function hydrateEnvelope() {
+    envelopeError = ''
+    const ref = potEnvelopeInput.trim()
+    if (!ref) {
+      envelopeError = 'paste an envelope ref first'
+      return
+    }
+    envelopeBusy = true
+    try {
+      // Persist the current Bee URL first so the envelope fetch uses it.
+      settings.beeUrl = beeInput.trim().replace(/\/$/, '')
+      await hydratePotFromEnvelope(ref)
+      potByNumberInput = settings.potByNumber
+      potByHashInput = settings.potByHash
+      potByTxInput = settings.potByTx
+      potByAddressInput = settings.potByAddress
+      potByBalanceBlockInput = settings.potByBalanceBlock
+      potMetaInput = settings.potMeta
+      potEnvelopeInput = ''
+    } catch (err) {
+      envelopeError = (err as Error).message
+    } finally {
+      envelopeBusy = false
+    }
   }
 
   let query = $state('')
@@ -312,9 +348,36 @@
         {:else}
           <div class="flex flex-col gap-3 rounded-md border p-3">
             <p class="text-xs text-muted-foreground">
-              Paste the four refs printed by <code class="font-mono">pnpm era:upload-pot</code> (or
-              read from <code class="font-mono">eras-*.pot.json</code>).
+              Paste the envelope ref printed by <code class="font-mono">pnpm era:upload-pot</code> to
+              hydrate every index in one shot, or fill the individual refs below.
             </p>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-envelope"
+                >Envelope ref <span class="text-muted-foreground">(shortcut)</span></Label
+              >
+              <div class="flex gap-2">
+                <Input
+                  id="pot-envelope"
+                  type="text"
+                  bind:value={potEnvelopeInput}
+                  placeholder="64-character hex — fetches and fills every POT ref"
+                  spellcheck="false"
+                  class="font-mono"
+                  disabled={envelopeBusy}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onclick={hydrateEnvelope}
+                  disabled={envelopeBusy}
+                >
+                  {envelopeBusy ? 'Fetching…' : 'Hydrate'}
+                </Button>
+              </div>
+              {#if envelopeError}
+                <p class="text-xs text-red-600">envelope fetch failed: {envelopeError}</p>
+              {/if}
+            </div>
             <div class="flex flex-col gap-2">
               <Label for="pot-by-number"
                 >byNumber{#if hasPublisher}
@@ -352,6 +415,32 @@
                 type="text"
                 bind:value={potByTxInput}
                 placeholder="64-character hex (all-zeros when no tx indexed)"
+                spellcheck="false"
+                class="font-mono"
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-by-address"
+                >byAddress <span class="text-muted-foreground">(optional)</span></Label
+              >
+              <Input
+                id="pot-by-address"
+                type="text"
+                bind:value={potByAddressInput}
+                placeholder="64-character hex"
+                spellcheck="false"
+                class="font-mono"
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-by-balance-block"
+                >byBalanceBlock <span class="text-muted-foreground">(optional)</span></Label
+              >
+              <Input
+                id="pot-by-balance-block"
+                type="text"
+                bind:value={potByBalanceBlockInput}
+                placeholder="64-character hex"
                 spellcheck="false"
                 class="font-mono"
               />
