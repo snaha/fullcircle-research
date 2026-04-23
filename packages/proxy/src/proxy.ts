@@ -1,11 +1,16 @@
 // Transparent HTTP forward proxy for the Bee API.
 //
 // Non-cacheable requests (GETs, non-upload POSTs) stream bodies end-to-end.
-// Cacheable requests (POST /bytes | /chunks | /bzz with a postage batch
-// header) are buffered: the request body is SHA-256'd and looked up in an
-// on-disk SQLite cache keyed by (body hash, batch id, path). A hit returns
-// the stored 2xx response without touching the upstream; a miss forwards,
-// buffers the response, and stores it on 2xx.
+// Cacheable requests (POST /bytes | /chunks | /bzz | /soc with a postage
+// batch header) are buffered: the request body is SHA-256'd and looked up
+// in an on-disk SQLite cache keyed by (body hash, batch id, path). A hit
+// returns the stored 2xx response without touching the upstream; a miss
+// forwards, buffers the response, and stores it on 2xx.
+//
+// On connection-level upstream failures during the cacheable path
+// (ETIMEDOUT, ECONNRESET, etc.), the proxy retries with exponential
+// backoff instead of surfacing a 502 — the whole point of sitting in front
+// of a flaky mainnet node is that the client doesn't have to care.
 
 import http, {
   type IncomingMessage,
@@ -15,10 +20,29 @@ import http, {
 } from 'node:http'
 
 import { UploadCache, type CachedResponse } from './cache.js'
+import { handleWsUpgrade } from './ws-proxy.js'
 
 const MAX_BUFFERED_BYTES = 64 * 1024 * 1024 // 64 MiB — bodies above this bypass cache
 
-const CACHEABLE_PATH_PREFIXES = ['/bytes', '/chunks', '/bzz']
+// Content-addressed POST endpoints: identical (body, batch) → identical
+// response every time. We skip /feeds (mutable updates), /stamps (creates
+// state), /chunks/stream (GET + WebSocket upgrade, not POST).
+const CACHEABLE_PATH_PREFIXES = ['/bytes', '/chunks', '/bzz', '/soc']
+
+const MAX_ATTEMPTS = 5
+const BASE_RETRY_DELAY_MS = 200
+
+const RETRYABLE_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'EPIPE',
+  'ENOTCONN',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENETDOWN',
+])
 
 export interface ProxyConfig {
   listenHost: string
@@ -28,7 +52,7 @@ export interface ProxyConfig {
   cache?: UploadCache
 }
 
-interface StampStats {
+export interface StampStats {
   uploads: number
   bytes: number
 }
@@ -37,13 +61,13 @@ export function createProxyServer(cfg: ProxyConfig): Server {
   const agent = new http.Agent({ keepAlive: true, maxSockets: 256 })
   const stamps = new Map<string, StampStats>()
 
-  return http.createServer((clientReq, clientRes) => {
+  const server = http.createServer((clientReq, clientRes) => {
     const startedNs = process.hrtime.bigint()
     const batchId = headerOne(clientReq.headers['swarm-postage-batch-id'])
     const basePath = pathRoot(clientReq.url ?? '')
 
     if (cfg.cache && clientReq.method === 'POST' && batchId && isCacheable(basePath)) {
-      handleCacheable(cfg, agent, stamps, cfg.cache, clientReq, clientRes, {
+      void handleCacheable(cfg, agent, stamps, cfg.cache, clientReq, clientRes, {
         startedNs,
         batchId,
         basePath,
@@ -52,6 +76,13 @@ export function createProxyServer(cfg: ProxyConfig): Server {
       handleStream(cfg, agent, stamps, clientReq, clientRes, startedNs)
     }
   })
+
+  // WebSocket upgrades: Bee's /chunks/stream. Cached + reconnecting proxy.
+  server.on('upgrade', (req, socket, head) => {
+    handleWsUpgrade(req, socket, head, cfg, stamps)
+  })
+
+  return server
 }
 
 function handleStream(
@@ -111,7 +142,7 @@ interface CacheableCtx {
   basePath: string
 }
 
-function handleCacheable(
+async function handleCacheable(
   cfg: ProxyConfig,
   agent: http.Agent,
   stamps: Map<string, StampStats>,
@@ -119,37 +150,43 @@ function handleCacheable(
   clientReq: IncomingMessage,
   clientRes: ServerResponse,
   ctx: CacheableCtx,
-): void {
-  readBody(clientReq, MAX_BUFFERED_BYTES)
-    .then((body) => {
-      if (body === null) {
-        // Oversized — fall back to streaming, skipping cache entirely.
-        handleStream(cfg, agent, stamps, clientReq, clientRes, ctx.startedNs)
-        return
-      }
-      const hash = UploadCache.hashBody(body)
-      const cached = cache.lookup(hash, ctx.batchId, ctx.basePath)
-      if (cached) {
-        writeCached(clientRes, cached)
-        logRequest(clientReq, cached.status, elapsedMs(ctx.startedNs), {
-          reqBytes: body.length,
-          respBytes: cached.body.length,
-          stamps,
-          cacheTag: 'cache=hit',
-        })
-        return
-      }
-      forwardAndStore(cfg, agent, stamps, cache, clientReq, clientRes, body, hash, ctx)
-    })
-    .catch((err: Error) => {
-      failUpstream(clientRes, err)
-      process.stderr.write(
-        `${clientReq.method} ${clientReq.url} -> ERR ${err.message} (${elapsedMs(ctx.startedNs)}ms)\n`,
-      )
-    })
+): Promise<void> {
+  try {
+    const body = await readBody(clientReq, MAX_BUFFERED_BYTES)
+    if (body === null) {
+      // Oversized — fall back to streaming, skipping cache entirely.
+      handleStream(cfg, agent, stamps, clientReq, clientRes, ctx.startedNs)
+      return
+    }
+    const hash = UploadCache.hashBody(body)
+    const cached = cache.lookup(hash, ctx.batchId, ctx.basePath)
+    if (cached) {
+      writeCached(clientRes, cached)
+      logRequest(clientReq, cached.status, elapsedMs(ctx.startedNs), {
+        reqBytes: body.length,
+        respBytes: cached.body.length,
+        stamps,
+        cacheTag: 'cache=hit',
+      })
+      return
+    }
+    await forwardAndStore(cfg, agent, stamps, cache, clientReq, clientRes, body, hash, ctx)
+  } catch (err) {
+    const e = err as Error
+    failUpstream(clientRes, e)
+    process.stderr.write(
+      `${clientReq.method} ${clientReq.url} -> ERR ${e.message} (${elapsedMs(ctx.startedNs)}ms)\n`,
+    )
+  }
 }
 
-function forwardAndStore(
+interface UpstreamResult {
+  status: number
+  filteredHeaders: Record<string, string>
+  body: Buffer
+}
+
+async function forwardAndStore(
   cfg: ProxyConfig,
   agent: http.Agent,
   stamps: Map<string, StampStats>,
@@ -159,55 +196,121 @@ function forwardAndStore(
   body: Buffer,
   hash: Buffer,
   ctx: CacheableCtx,
-): void {
+): Promise<void> {
   const headers = forwardHeaders(clientReq.headers, cfg)
   headers['content-length'] = body.length
+  const requestLabel = `${clientReq.method} ${clientReq.url}`
 
-  const upstreamReq = http.request(
-    {
-      host: cfg.upstreamHost,
-      port: cfg.upstreamPort,
-      method: clientReq.method,
-      path: clientReq.url,
-      headers,
-      agent,
-    },
-    (upstreamRes) => {
-      const chunks: Buffer[] = []
-      upstreamRes.on('data', (chunk: Buffer) => {
-        chunks.push(chunk)
-      })
-      upstreamRes.on('end', () => {
-        const respBody = Buffer.concat(chunks)
-        const status = upstreamRes.statusCode ?? 502
-        const filteredHeaders = UploadCache.filterHeaders(upstreamRes.headers)
-        clientRes.writeHead(status, { ...filteredHeaders, 'content-length': respBody.length })
-        clientRes.end(respBody)
-        if (status >= 200 && status < 300) {
-          cache.store(hash, ctx.batchId, ctx.basePath, {
-            status,
-            headers: filteredHeaders,
-            body: respBody,
-          })
-        }
-        logRequest(clientReq, status, elapsedMs(ctx.startedNs), {
-          reqBytes: body.length,
-          respBytes: respBody.length,
-          stamps,
-          cacheTag: status >= 200 && status < 300 ? 'cache=miss' : 'cache=skip',
-        })
-      })
-    },
+  const result = await sendUpstreamWithRetry(
+    cfg,
+    agent,
+    clientReq.method ?? 'POST',
+    clientReq.url ?? '',
+    headers,
+    body,
+    requestLabel,
   )
 
-  upstreamReq.on('error', (err) => {
-    failUpstream(clientRes, err)
-    process.stderr.write(
-      `${clientReq.method} ${clientReq.url} -> ERR ${err.message} (${elapsedMs(ctx.startedNs)}ms)\n`,
-    )
+  clientRes.writeHead(result.status, {
+    ...result.filteredHeaders,
+    'content-length': result.body.length,
   })
+  clientRes.end(result.body)
 
-  upstreamReq.end(body)
+  const isSuccess = result.status >= 200 && result.status < 300
+  if (isSuccess) {
+    cache.store(hash, ctx.batchId, ctx.basePath, {
+      status: result.status,
+      headers: result.filteredHeaders,
+      body: result.body,
+    })
+  }
+  logRequest(clientReq, result.status, elapsedMs(ctx.startedNs), {
+    reqBytes: body.length,
+    respBytes: result.body.length,
+    stamps,
+    cacheTag: isSuccess ? 'cache=miss' : 'cache=skip',
+  })
+}
+
+async function sendUpstreamWithRetry(
+  cfg: ProxyConfig,
+  agent: http.Agent,
+  method: string,
+  path: string,
+  headers: OutgoingHttpHeaders,
+  body: Buffer,
+  requestLabel: string,
+): Promise<UpstreamResult> {
+  let attempt = 0
+  for (;;) {
+    attempt++
+    try {
+      return await sendUpstreamOnce(cfg, agent, method, path, headers, body)
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException
+      if (attempt >= MAX_ATTEMPTS || !isRetryable(e)) throw err
+      const delay = backoffDelay(attempt)
+      const tag = e.code ?? e.message
+      process.stderr.write(
+        `${requestLabel} -> retry ${attempt}/${MAX_ATTEMPTS - 1} in ${delay}ms (${tag})\n`,
+      )
+      await sleep(delay)
+    }
+  }
+}
+
+function sendUpstreamOnce(
+  cfg: ProxyConfig,
+  agent: http.Agent,
+  method: string,
+  path: string,
+  headers: OutgoingHttpHeaders,
+  body: Buffer,
+): Promise<UpstreamResult> {
+  return new Promise<UpstreamResult>((resolve, reject) => {
+    const upstreamReq = http.request(
+      {
+        host: cfg.upstreamHost,
+        port: cfg.upstreamPort,
+        method,
+        path,
+        headers,
+        agent,
+      },
+      (upstreamRes) => {
+        const chunks: Buffer[] = []
+        upstreamRes.on('data', (chunk: Buffer) => {
+          chunks.push(chunk)
+        })
+        upstreamRes.on('end', () => {
+          resolve({
+            status: upstreamRes.statusCode ?? 502,
+            filteredHeaders: UploadCache.filterHeaders(upstreamRes.headers),
+            body: Buffer.concat(chunks),
+          })
+        })
+        upstreamRes.on('error', reject)
+      },
+    )
+    upstreamReq.on('error', reject)
+    upstreamReq.end(body)
+  })
+}
+
+function isRetryable(err: NodeJS.ErrnoException): boolean {
+  if (err.code && RETRYABLE_CODES.has(err.code)) return true
+  return err.message === 'socket hang up'
+}
+
+function backoffDelay(attempt: number): number {
+  const base = BASE_RETRY_DELAY_MS * Math.pow(2, attempt - 1)
+  const jitter = Math.floor(Math.random() * base * 0.25)
+  return base + jitter
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function writeCached(clientRes: ServerResponse, cached: CachedResponse): void {

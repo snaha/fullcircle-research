@@ -13,10 +13,11 @@ Usage: proxy [options]
 Options:
   --listen HOST:PORT     address to listen on (default 127.0.0.1:1733)
   --upstream HOST:PORT   upstream Bee node (default 127.0.0.1:1633)
-  --cache-db PATH        sqlite cache for POST /bytes | /chunks | /bzz
-                         responses (default <repo>/data/proxy-cache.db,
-                         override via FULLCIRCLE_DATA_DIR; set to "off"
-                         to disable caching entirely)
+  --cache-db PATH        sqlite cache for POST /bytes | /chunks | /bzz | /soc
+                         responses. Default is per-upstream:
+                         <data>/proxy-cache-<host>_<port>.db (data dir via
+                         FULLCIRCLE_DATA_DIR, else repo-root data/). Set to
+                         "off" to disable caching entirely.
   --help, -h             show this message
 `
 
@@ -59,7 +60,7 @@ interface ParsedArgs {
 function parseArgs(args: string[]): ParsedArgs {
   let listen = '127.0.0.1:1733'
   let upstream = '127.0.0.1:1633'
-  let cacheDb = resolve(process.env.FULLCIRCLE_DATA_DIR ?? DEFAULT_DATA_DIR, 'proxy-cache.db')
+  let cacheDb: string | null = null
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (a === '--help' || a === '-h') {
@@ -79,7 +80,19 @@ function parseArgs(args: string[]): ParsedArgs {
   }
   const [listenHost, listenPort] = parseHostPort(listen, '--listen')
   const [upstreamHost, upstreamPort] = parseHostPort(upstream, '--upstream')
-  return { listenHost, listenPort, upstreamHost, upstreamPort, cacheDb }
+  return {
+    listenHost,
+    listenPort,
+    upstreamHost,
+    upstreamPort,
+    cacheDb: cacheDb ?? defaultCacheDb(upstreamHost, upstreamPort),
+  }
+}
+
+function defaultCacheDb(upstreamHost: string, upstreamPort: number): string {
+  const dataDir = process.env.FULLCIRCLE_DATA_DIR ?? DEFAULT_DATA_DIR
+  const safeHost = upstreamHost.replace(/[^a-zA-Z0-9.-]/g, '_')
+  return resolve(dataDir, `proxy-cache-${safeHost}_${upstreamPort}.db`)
 }
 
 function requireValue(args: string[], i: number, flag: string): string {
