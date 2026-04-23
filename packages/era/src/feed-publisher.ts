@@ -6,7 +6,8 @@
 //   manifest → the Mantaray manifest root ref (self-contained)
 //   sqlite   → the SQLite Merkle-tree root ref (dbRef)
 //   pot      → ref of a small JSON envelope on Swarm that carries
-//              { byNumber, byHash, byTx, meta } — see `uploadPotEnvelope`
+//              { byNumber, byHash, byTx, byAddress, byBalanceBlock, meta }
+//              — see `uploadPotEnvelope`
 //
 // The signer is read from FULLCIRCLE_FEED_SIGNER_KEY or --feed-signer-key.
 // If neither is set, publishFeedUpdate prints a warning and returns null —
@@ -94,11 +95,10 @@ async function recoverFeedHints(
     if (!res.ok) break
     const chunk = new Uint8Array(await res.arrayBuffer())
     if (chunk.length < SOC_HEADER_LEN + 8) break
-    const ts = new DataView(
-      chunk.buffer,
-      chunk.byteOffset + SOC_HEADER_LEN,
-      8,
-    ).getBigUint64(0, false)
+    const ts = new DataView(chunk.buffer, chunk.byteOffset + SOC_HEADER_LEN, 8).getBigUint64(
+      0,
+      false,
+    )
     hint = { epoch, timestamp: ts }
     if (epoch.level === 0) break
     epoch = epoch.childAt(at)
@@ -258,12 +258,18 @@ export async function tryPublishFeedUpdate(
 
 /**
  * Shape of the JSON envelope uploaded for the POT feed payload. The explorer
- * fetches this via /bytes/{ref} and uses it to populate the four POT refs.
+ * fetches this via /bytes/{ref} and uses it to populate every POT ref.
+ *
+ * `byAddress` / `byBalanceBlock` are nullable for forward compat with older
+ * envelopes written before state indexing was added; new uploads always
+ * populate them with the fresh (possibly-empty) KVS refs.
  */
 export interface PotFeedEnvelope {
   byNumber: string
   byHash: string
   byTx: string
+  byAddress: string | null
+  byBalanceBlock: string | null
   meta: string | null
 }
 

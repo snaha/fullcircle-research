@@ -6,9 +6,10 @@
 //
 //   manifest → the manifest root ref (used directly via /bzz/{ref}/...)
 //   sqlite   → the dbRef (used directly via /bytes/{ref} with Range)
-//   pot      → ref of a tiny JSON envelope { byNumber, byHash, byTx, meta }
-//              that this module fetches and parses, giving the explorer all
-//              four POT refs in one shot
+//   pot      → ref of a tiny JSON envelope with every POT ref
+//              { byNumber, byHash, byTx, byAddress, byBalanceBlock, meta }
+//              that this module fetches and parses, giving the explorer
+//              every POT ref in one shot
 
 import { Bee, EthAddress } from '@ethersphere/bee-js'
 import { createSyncEpochFinder } from '@snaha/swarm-id'
@@ -29,6 +30,13 @@ export interface ResolvedPot {
   byNumber: string
   byHash: string
   byTx: string
+  /**
+   * Null on envelopes published before state indexing was added — consumers
+   * should treat these as "no address/balance-block lookup available" rather
+   * than an error.
+   */
+  byAddress: string | null
+  byBalanceBlock: string | null
   meta: string | null
 }
 
@@ -76,6 +84,8 @@ export async function resolveLatest(
     byNumber?: string
     byHash?: string
     byTx?: string
+    byAddress?: string | null
+    byBalanceBlock?: string | null
     meta?: string | null
   }
   if (!envelope.byNumber || !envelope.byHash || !envelope.byTx) {
@@ -86,6 +96,8 @@ export async function resolveLatest(
     byNumber: envelope.byNumber,
     byHash: envelope.byHash,
     byTx: envelope.byTx,
+    byAddress: envelope.byAddress ?? null,
+    byBalanceBlock: envelope.byBalanceBlock ?? null,
     meta: envelope.meta ?? null,
   }
 }

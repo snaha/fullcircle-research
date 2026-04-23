@@ -31,6 +31,7 @@ export {
 export {
   openPotIndexes,
   addBlocksToPot,
+  addBalanceEventsToPot,
   savePotIndexes,
   getPotBlockRange,
   writePotBlockRangeMeta,
@@ -38,6 +39,7 @@ export {
   type PotIndexRefs,
   type PotMeta,
   type OpenPotIndexesOptions,
+  type AddBalanceEventsResult as AddPotBalanceEventsResult,
 } from './swarm-pot.js'
 
 export { FEED_TOPIC_STRINGS, FEED_TOPICS, type FeedKind } from './feed-topics.js'
