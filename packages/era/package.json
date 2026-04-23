@@ -8,7 +8,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./bundle": "./src/bundle.ts",
-    "./feed-topics": "./src/feed-topics.ts"
+    "./feed-topics": "./src/feed-topics.ts",
+    "./feed-publisher": "./src/feed-publisher.ts",
+    "./refs-state": "./src/refs-state.ts"
   },
   "scripts": {
     "download": "tsx src/download.ts",
@@ -18,6 +20,7 @@
     "upload-pot": "tsx src/upload-pot.ts",
     "state-extract": "tsx src/state-extract.ts",
     "upload-sqlite": "tsx src/upload-sqlite.ts",
+    "publish-refs": "tsx src/publish-refs.ts",
     "feed-diag": "tsx src/feed-diag.ts",
     "check": "tsc --noEmit",
     "typecheck": "pnpm check",

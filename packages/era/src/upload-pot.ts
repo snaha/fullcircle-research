@@ -18,6 +18,7 @@ import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
 import { DATA_DIR, header, parseFeedSignerFlag, resolveTargets, type Target } from './cli-shared.js'
 import { loadSigner, tryPublishFeedUpdate, uploadPotEnvelope } from './feed-publisher.js'
+import { saveLatestRefs } from './refs-state.js'
 import {
   addBalanceEventsToPot,
   addBlocksToPot,
@@ -290,10 +291,11 @@ console.log(`       envelope: ${envelopeRef}`)
 console.log(`       written:  ${metaPath}`)
 
 const signer = loadSigner(parseFeedSignerFlag(process.argv))
-await tryPublishFeedUpdate({
+const feedResult = await tryPublishFeedUpdate({
   kind: 'pot',
   referenceHex: envelopeRef,
   bee,
   batchId,
   signer,
 })
+await saveLatestRefs({ pot: envelopeRef, publisher: feedResult?.owner })

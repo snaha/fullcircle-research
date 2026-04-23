@@ -250,6 +250,34 @@ export async function publishFeedUpdate(
   }
 }
 
+export interface CreateFeedManifestResult {
+  reference: string
+  owner: string
+  topic: string
+}
+
+/**
+ * Upload a feed manifest chunk to Bee for `kind`. The returned reference is
+ * deterministic (same owner + topic always maps to the same chunk), so it acts
+ * as a stable permalink: `/bzz/{reference}/` always resolves to the latest
+ * feed update without the caller needing to know the current SOC address.
+ */
+export async function createFeedManifest(
+  bee: Bee,
+  batchId: string,
+  kind: FeedKind,
+  signer: PrivateKey,
+): Promise<CreateFeedManifestResult> {
+  const ownerHex = signer.publicKey().address().toHex()
+  const topic = FEED_TOPICS[kind]
+  const reference = await bee.createFeedManifest(batchId, topic, ownerHex)
+  return {
+    reference: reference.toHex(),
+    owner: ownerHex,
+    topic: FEED_TOPIC_STRINGS[kind],
+  }
+}
+
 /**
  * Try to publish a feed update. Returns null (with a warning log) when no
  * signer is configured, so uploads continue to work without feeds.
@@ -281,6 +309,26 @@ export interface PotFeedEnvelope {
   byAddress: string
   byBalanceBlock: string
   meta: string | null
+}
+
+/**
+ * Create a Swarm feed manifest for the given feed kind and signer. The
+ * returned reference is stable — it never changes for a given (topic, owner)
+ * pair — so it can be used as a permanent entry point that always resolves to
+ * the latest feed update when accessed via /bzz/{ref}/.
+ *
+ * Returns { reference: hex } matching the shape the caller expects.
+ */
+export async function createFeedManifest(
+  bee: Bee,
+  batchId: string,
+  kind: FeedKind,
+  signer: PrivateKey,
+): Promise<{ reference: string }> {
+  const topic = FEED_TOPICS[kind]
+  const owner = signer.publicKey().address()
+  const ref = await bee.createFeedManifest(batchId, topic, owner)
+  return { reference: ref.toHex() }
 }
 
 /**

@@ -11,13 +11,23 @@
 //   sqlite   — SQLite database synced to Swarm as 4KB page chunks; lookups use
 //              sql.js (SQLite WASM) to query the database, fetching pages
 //              on-demand from Swarm.
+//
+// Build-time defaults are injected by vite.config.ts from data/latest-refs.json
+// so the explorer works out of the box without the user opening settings.
 
 import { browser } from '$app/environment'
 import { fetchPotEnvelope, resolveLatest } from './feed-resolver'
 
+// Injected at build time from data/latest-refs.json
+declare const __BUILD_PUBLISHER__: string
+declare const __BUILD_MANIFEST__: string
+declare const __BUILD_POT__: string
+declare const __BUILD_SQLITE__: string
+
 export type Source = 'manifest' | 'pot' | 'sqlite'
 
 const KEY_BEE = 'fullcircle.explorer.beeUrl'
+const KEY_USE_FEED = 'fullcircle.explorer.useFeed'
 const KEY_SOURCE = 'fullcircle.explorer.source'
 const KEY_PUBLISHER = 'fullcircle.explorer.publisherAddress'
 const KEY_MANIFEST = 'fullcircle.explorer.manifestRef'
@@ -47,23 +57,32 @@ function loadSource(): Source {
   return 'manifest'
 }
 
+function loadUseFeed(): boolean {
+  if (!browser) return true
+  const stored = localStorage.getItem(KEY_USE_FEED)
+  // Default to true (use feed) when not previously set
+  return stored === null ? true : stored === 'true'
+}
+
 export const settings = $state({
   beeUrl: load(KEY_BEE, DEFAULT_BEE),
+  useFeed: loadUseFeed(),
   source: loadSource(),
-  publisherAddress: load(KEY_PUBLISHER, ''),
-  manifestRef: load(KEY_MANIFEST, ''),
-  potByNumber: load(KEY_POT_BY_NUMBER, ''),
+  publisherAddress: load(KEY_PUBLISHER, __BUILD_PUBLISHER__),
+  manifestRef: load(KEY_MANIFEST, __BUILD_MANIFEST__),
+  potByNumber: load(KEY_POT_BY_NUMBER, __BUILD_POT__),
   potByHash: load(KEY_POT_BY_HASH, ''),
   potByTx: load(KEY_POT_BY_TX, ''),
   potByAddress: load(KEY_POT_BY_ADDRESS, ''),
   potByBalanceBlock: load(KEY_POT_BY_BALANCE_BLOCK, ''),
   potMeta: load(KEY_POT_META, ''),
-  sqliteDbRef: load(KEY_SQLITE_DB_REF, ''),
+  sqliteDbRef: load(KEY_SQLITE_DB_REF, __BUILD_SQLITE__),
   sqliteMeta: load(KEY_SQLITE_META, ''),
 })
 
 export interface SaveArgs {
   beeUrl: string
+  useFeed: boolean
   source: Source
   publisherAddress: string
   manifestRef: string
@@ -79,6 +98,7 @@ export interface SaveArgs {
 
 export function saveSettings(args: SaveArgs): void {
   settings.beeUrl = args.beeUrl.trim().replace(/\/$/, '')
+  settings.useFeed = args.useFeed
   settings.source = args.source
   settings.publisherAddress = normAddress(args.publisherAddress)
   settings.manifestRef = normHex(args.manifestRef)
@@ -92,6 +112,7 @@ export function saveSettings(args: SaveArgs): void {
   settings.sqliteMeta = normHex(args.sqliteMeta)
   if (browser) {
     localStorage.setItem(KEY_BEE, settings.beeUrl)
+    localStorage.setItem(KEY_USE_FEED, String(settings.useFeed))
     localStorage.setItem(KEY_SOURCE, settings.source)
     localStorage.setItem(KEY_PUBLISHER, settings.publisherAddress)
     localStorage.setItem(KEY_MANIFEST, settings.manifestRef)
@@ -137,10 +158,9 @@ function updateRef(key: string, value: string): void {
 }
 
 /**
- * Resolve the active source's refs from the publisher's epoch feed. Writes
- * the result into `settings` and localStorage so the explorer behaves as if
- * the user had pasted them manually. Does nothing if publisherAddress is
- * empty. Throws on feed-resolution errors so callers can surface them.
+ * Resolve the active source's refs from the publisher's epoch feed. Always
+ * re-resolves (ignores any previously cached ref) — intended for use when
+ * useFeed is true. Throws on feed-resolution errors.
  */
 export async function resolveActiveSourceFromFeed(): Promise<void> {
   if (!isAddress(settings.publisherAddress)) return

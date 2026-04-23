@@ -4,12 +4,15 @@
 //   pnpm publish-to-swarm --batch-id <postage-batch-id>
 //   pnpm publish-to-swarm --batch-id abc123... --bee-url http://localhost:1633
 //   pnpm publish-to-swarm --batch-id abc123... --build-dir ./build
+//   pnpm publish-to-swarm --batch-id abc123... --feed-signer-key <key>
 
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Bee } from '@ethersphere/bee-js'
+import { createFeedManifest, loadSigner, tryPublishFeedUpdate } from '@fullcircle/era/feed-publisher'
+import { saveLatestRefs } from '@fullcircle/era/refs-state'
 
 const DATA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../data')
 const DEFAULT_BUILD_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../build')
@@ -20,6 +23,7 @@ interface Args {
   beeUrl: string
   batchId?: string
   buildDir: string
+  feedSignerKey?: string
 }
 
 function parseArgs(argv: string[]): Args {
@@ -29,6 +33,7 @@ function parseArgs(argv: string[]): Args {
     if (arg === '--bee-url' && argv[i + 1]) result.beeUrl = argv[++i]
     else if (arg === '--batch-id' && argv[i + 1]) result.batchId = argv[++i]
     else if (arg === '--build-dir' && argv[i + 1]) result.buildDir = resolve(argv[++i])
+    else if (arg === '--feed-signer-key' && argv[i + 1]) result.feedSignerKey = argv[++i]
   }
   return result
 }
@@ -42,6 +47,7 @@ if (!args.batchId) {
   console.error('  pnpm publish-to-swarm --batch-id <postage-batch-id>')
   console.error('  pnpm publish-to-swarm --batch-id abc123... --bee-url http://localhost:1633')
   console.error('  pnpm publish-to-swarm --batch-id abc123... --build-dir ./build')
+  console.error('  pnpm publish-to-swarm --batch-id abc123... --feed-signer-key <key>')
   console.error('')
   console.error('Run `pnpm build` first to produce the build/ directory.')
   process.exit(1)
@@ -95,3 +101,22 @@ console.log(`\ndone in ${elapsed} ms`)
 console.log(`  manifest: ${rootHex}`)
 console.log(`  access:   ${args.beeUrl}/bzz/${rootHex}/`)
 console.log(`  written:  ${outputPath}`)
+
+const signer = loadSigner(args.feedSignerKey)
+const feedResult = await tryPublishFeedUpdate({
+  kind: 'manifest',
+  referenceHex: rootHex,
+  bee,
+  batchId,
+  signer,
+})
+
+let feedManifestRef: string | undefined
+if (signer) {
+  const fm = await createFeedManifest(bee, batchId, 'manifest', signer)
+  feedManifestRef = fm.reference
+  console.log(`  feed manifest: ${feedManifestRef}`)
+  console.log(`  feed access:   ${args.beeUrl}/bzz/${feedManifestRef}/`)
+}
+
+await saveLatestRefs({ manifest: rootHex, publisher: feedResult?.owner, feedManifest: feedManifestRef })
