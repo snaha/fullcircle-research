@@ -12,26 +12,35 @@
 // If neither is set, publishFeedUpdate prints a warning and returns null —
 // the upload itself still succeeds.
 //
-// Epoch math is stateless but each update needs hints from the previous one
-// to land on the correct epoch. Hints are cached at data/feed-state.json.
+// Epoch math is stateless but each update needs a prior hint (epoch +
+// timestamp) to land on the correct next epoch. We recover that hint by
+// walking the publisher's own feed spine on Swarm before each publish —
+// Swarm is the source of truth, so wiping local state or running from a
+// fresh machine stays safe.
 //
 // Implementation: bee-js v11's `makeSOCWriter` handles the SOC upload; the
 // epoch math (identifier derivation, next-epoch calculation) lives in
 // ./feed-epoch. We don't use @snaha/swarm-id here because its published
 // bundle inlines a browser-only axios path that fails on Node.
 
-import { readFile, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import { Bee, Identifier, PrivateKey } from '@ethersphere/bee-js'
-import { DATA_DIR } from './cli-shared.js'
-import { EpochIndex, epochIdentifier, epochPayload, nextEpoch } from './feed-epoch.js'
+import { keccak_256 } from '@noble/hashes/sha3'
+import {
+  EpochIndex,
+  MAX_EPOCH_LEVEL,
+  epochIdentifier,
+  epochPayload,
+  nextEpoch,
+} from './feed-epoch.js'
 import { FEED_TOPIC_STRINGS, FEED_TOPICS, type FeedKind } from './feed-topics.js'
 
 export type { FeedKind } from './feed-topics.js'
 export { FEED_TOPICS as TOPICS } from './feed-topics.js'
 
-export const FEED_STATE_PATH = resolve(DATA_DIR, 'feed-state.json')
 const SIGNER_KEY_ENV = 'FULLCIRCLE_FEED_SIGNER_KEY'
+
+// SOC wire format: identifier(32) || signature(65) || span(8) || payload
+const SOC_HEADER_LEN = 32 + 65 + 8
 
 /**
  * Resolve a signer private key from the CLI flag (if given) or the
@@ -48,25 +57,53 @@ export function loadSigner(flagValue?: string): PrivateKey | null {
   return new PrivateKey(hex)
 }
 
-interface FeedHints {
-  lastEpoch: { start: string; level: number }
-  lastTimestamp: string
-}
+/**
+ * Walk the publisher's feed spine on Swarm and return the deepest existing
+ * update's (epoch, timestamp) as a seed for `nextEpoch`.
+ *
+ * Descends root → `childAt(at)` while each candidate SOC exists, parsing the
+ * timestamp out of the chunk payload at each step. Returns null when the
+ * publisher has never written a feed update (root is empty).
+ *
+ * Good enough for seeding even when the most-recent update is off the
+ * now-spine: `EpochIndex.next()` only consults the prev epoch when `at` still
+ * falls within its range; otherwise it uses `lca(at, last)` which needs only
+ * the timestamp. An ancestor hint is always safe because the newer SOC we
+ * publish dominates any prior chunk we'd re-write at the same address.
+ */
+async function recoverFeedHints(
+  bee: Bee,
+  topic: Uint8Array,
+  ownerHex: string,
+  at: bigint,
+): Promise<{ epoch: EpochIndex; timestamp: bigint } | null> {
+  const ownerBytes = hexToBytes(ownerHex)
+  let epoch = new EpochIndex(0n, MAX_EPOCH_LEVEL)
+  let hint: { epoch: EpochIndex; timestamp: bigint } | null = null
 
-type FeedState = Partial<Record<FeedKind, FeedHints>>
+  while (true) {
+    const identifier = epochIdentifier(topic, epoch)
+    const socBuf = new Uint8Array(identifier.length + ownerBytes.length)
+    socBuf.set(identifier, 0)
+    socBuf.set(ownerBytes, identifier.length)
+    const addrHex = bytesToHex(keccak_256(socBuf))
 
-async function readFeedState(): Promise<FeedState> {
-  try {
-    const raw = await readFile(FEED_STATE_PATH, 'utf8')
-    return JSON.parse(raw) as FeedState
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    throw err
+    const res = await fetch(`${bee.url.replace(/\/$/, '')}/chunks/${addrHex}`, {
+      headers: { connection: 'close' },
+    })
+    if (!res.ok) break
+    const chunk = new Uint8Array(await res.arrayBuffer())
+    if (chunk.length < SOC_HEADER_LEN + 8) break
+    const ts = new DataView(
+      chunk.buffer,
+      chunk.byteOffset + SOC_HEADER_LEN,
+      8,
+    ).getBigUint64(0, false)
+    hint = { epoch, timestamp: ts }
+    if (epoch.level === 0) break
+    epoch = epoch.childAt(at)
   }
-}
-
-async function writeFeedState(state: FeedState): Promise<void> {
-  await writeFile(FEED_STATE_PATH, JSON.stringify(state, null, 2))
+  return hint
 }
 
 export interface PublishFeedUpdateOptions {
@@ -96,8 +133,9 @@ export interface PublishFeedUpdateResult {
 
 /**
  * Write one epoch-feed update announcing `referenceHex` as the latest index
- * ref for the given kind. Reads previous hints from FEED_STATE_PATH, signs
- * and uploads a SOC via bee-js, and persists the new hints on success.
+ * ref for the given kind. Recovers the previous hint by walking the
+ * publisher's own spine on Swarm (no local state file), signs and uploads a
+ * SOC via bee-js.
  */
 export async function publishFeedUpdate(
   options: PublishFeedUpdateOptions,
@@ -109,17 +147,18 @@ export async function publishFeedUpdate(
     throw new Error(`feed reference must be 32 or 64 bytes; got ${referenceBytes.length}`)
   }
 
-  const state = await readFeedState()
-  const prev = state[options.kind]
-  const prevEpoch = prev
-    ? new EpochIndex(BigInt(prev.lastEpoch.start), prev.lastEpoch.level)
-    : undefined
-  const prevTimestamp = prev ? BigInt(prev.lastTimestamp) : 0n
-
   const at = BigInt(Math.floor(Date.now() / 1000))
-  const epoch = nextEpoch(prevEpoch, prevTimestamp, at)
-
+  const ownerHex = options.signer.publicKey().address().toHex()
   const topic = FEED_TOPICS[options.kind].toUint8Array()
+
+  const hint = await recoverFeedHints(options.bee, topic, ownerHex, at)
+  log(
+    hint
+      ? `feed[${options.kind}] recovered hint · epoch{start:${hint.epoch.start},level:${hint.epoch.level}} · lastTs=${hint.timestamp}`
+      : `feed[${options.kind}] no prior updates on Swarm — starting at root`,
+  )
+  const epoch = nextEpoch(hint?.epoch, hint?.timestamp ?? 0n, at)
+
   const identifier = epochIdentifier(topic, epoch)
   const payload = epochPayload(at, referenceBytes)
 
@@ -136,7 +175,6 @@ export async function publishFeedUpdate(
   const identifierObj = new Identifier(identifier)
   const cac = options.bee.makeContentAddressedChunk(payload)
   const soc = cac.toSingleOwnerChunk(identifierObj, options.signer)
-  const ownerHex = options.signer.publicKey().address().toHex()
   const socAddressHex = soc.address.toHex()
 
   const url =
@@ -183,12 +221,6 @@ export async function publishFeedUpdate(
       { cause: err },
     )
   }
-
-  state[options.kind] = {
-    lastEpoch: { start: epoch.start.toString(), level: epoch.level },
-    lastTimestamp: at.toString(),
-  }
-  await writeFeedState(state)
 
   log(
     `feed[${options.kind}] updated · owner 0x${ownerHex}` +
@@ -270,4 +302,10 @@ function hexToBytes(hex: string): Uint8Array {
     bytes[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16)
   }
   return bytes
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let s = ''
+  for (const b of bytes) s += b.toString(16).padStart(2, '0')
+  return s
 }
