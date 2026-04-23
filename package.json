@@ -30,6 +30,8 @@
     "bee:logs": "docker compose -f docker/compose.yml logs -f queen",
     "bee:fresh": "docker/scripts/fresh.sh",
     "bee:stamp": "docker/scripts/buy-stamp.sh",
+    "proxy:start": "pnpm --filter @fullcircle/proxy run start",
+    "proxy:dev": "pnpm --filter @fullcircle/proxy run dev",
     "test": "pnpm -r run test"
   },
   "devDependencies": {
