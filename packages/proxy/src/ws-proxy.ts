@@ -180,10 +180,7 @@ async function runWsSession(
   }
 
   function drain(): void {
-    while (
-      queue.length > 0 &&
-      (queue[0]!.state === 'hit' || queue[0]!.state === 'miss-acked')
-    ) {
+    while (queue.length > 0 && (queue[0]!.state === 'hit' || queue[0]!.state === 'miss-acked')) {
       const entry = queue.shift()!
       if (entry.state === 'miss-acked' && canCache) {
         cache!.store(entry.hash, batchId!, WS_CACHE_PATH, {
@@ -205,9 +202,7 @@ async function runWsSession(
       }
       return
     }
-    const payload = Buffer.isBuffer(data)
-      ? (data as Buffer)
-      : Buffer.from(data as ArrayBuffer)
+    const payload = Buffer.isBuffer(data) ? (data as Buffer) : Buffer.from(data as ArrayBuffer)
     frameCount++
 
     if (!canCache) {
