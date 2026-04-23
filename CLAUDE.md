@@ -35,7 +35,7 @@ Package manager: **pnpm** (not npm). Root scripts:
 - `pnpm era:download [range|url]` -- download only
 - `pnpm era:process [range|url]` -- parse cached files only
 - `pnpm era:download-and-process [range|url]` -- both
-- `pnpm bee:start` -- boot local single Swarm node (queen only) via `@fairdatasociety/fdp-play`; queen API on `:1633`. Also `bee:start:detach`, `bee:stop`, `bee:logs`, `bee:fresh`.
+- `pnpm bee:start` -- boot the local Bee stack (geth dev chain + queen) via [`docker/compose.yml`](./docker/compose.yml); queen API on `:1633`, chain RPC on `:9545`. Also `bee:start:workers` (4 workers behind a profile), `bee:stop`, `bee:logs`, `bee:fresh`, `bee:stamp`.
 - `pnpm lint` / `pnpm format` / `pnpm knip` / `pnpm check:all` -- forward via `pnpm -r --if-present` to every package that defines the matching script.
 
 ## Tooling (prettier, eslint, knip)
