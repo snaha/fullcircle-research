@@ -51,7 +51,14 @@ export class BeeChunkStream {
     const headers: Record<string, string> = {
       'Swarm-Postage-Batch-Id': this.opts.batchId,
     }
-    if (this.opts.tag !== undefined) headers['Swarm-Tag'] = String(this.opts.tag)
+    if (this.opts.tag !== undefined) {
+      headers['Swarm-Tag'] = String(this.opts.tag)
+    } else {
+      // Without a tag there's no way for Bee to track queued chunks, so ask
+      // for synchronous push (deferred=false) — required on gateways where
+      // /tags is unavailable and useful in general for tag-less uploads.
+      headers['Swarm-Deferred-Upload'] = 'false'
+    }
 
     const ws = new WebSocket(wsUrl, { headers })
     this.ws = ws

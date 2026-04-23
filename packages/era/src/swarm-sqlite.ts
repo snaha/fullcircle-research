@@ -57,8 +57,11 @@ export interface SyncResult {
    * The Bee tag uid used for every chunk uploaded in this sync. Reuse for
    * related follow-up uploads (e.g. the epoch-feed SOC) so Bee sees them as
    * the same sync batch — fresh tags can hang on peerless nodes.
+   *
+   * `null` when the `/tags` endpoint is unavailable (e.g. on a public
+   * gateway). In that case chunks are uploaded with `deferred=false` instead.
    */
-  tagUid: number
+  tagUid: number | null
 }
 
 export interface AddBlocksResult {
@@ -213,7 +216,7 @@ export class SqliteIndexer {
     batchId: string,
     refs: ChunkWithSpan[],
     log: (msg: string) => void,
-    tagUid: number,
+    tagUid: number | null,
   ): Promise<string> {
     // Base case: single ref is the root
     if (refs.length === 1) {
@@ -236,8 +239,10 @@ export class SqliteIndexer {
       // Create intermediate chunk with cumulative span
       const chunk = this.makeContentAddressedChunkWithSpan(payload, totalSpan)
 
-      // Upload intermediate chunk using bee-js (tag required to avoid hanging)
-      await bee.uploadChunk(batchId, chunk.data, { tag: tagUid })
+      // Upload intermediate chunk using bee-js. Tag is required to avoid
+      // hanging on peerless nodes; when /tags is unavailable (e.g. gateway)
+      // we fall back to deferred=false so Bee pushes synchronously.
+      await bee.uploadChunk(batchId, chunk.data, chunkUploadOptions(tagUid))
       intermediateRefs.push(chunk)
     }
 
@@ -454,10 +459,19 @@ export class SqliteIndexer {
     const totalPages = Math.ceil(dbBuffer.length / PAGE_SIZE)
     log(`uploading ${totalPages} pages (${(dbBuffer.length / 1024 / 1024).toFixed(2)} MB)...`)
 
-    // Create a tag for chunk uploads (required to avoid hanging on nodes without peers)
-    const tag = await bee.createTag()
-    const tagUid = tag.uid
-    log(`created tag ${tagUid}`)
+    // Create a tag for chunk uploads (required to avoid hanging on nodes
+    // without peers). Gateways typically don't expose /tags — if createTag
+    // fails, fall back to uploading with `deferred=false` and no tag header.
+    let tagUid: number | null = null
+    try {
+      const tag = await bee.createTag()
+      tagUid = tag.uid
+      log(`created tag ${tagUid}`)
+    } catch (err) {
+      log(
+        `createTag failed (${(err as Error).message}); uploading with deferred=false and no tag header`,
+      )
+    }
 
     // Split into 4KB chunks and create content-addressed chunks
     const leafChunks: ChunkWithSpan[] = []
@@ -472,7 +486,7 @@ export class SqliteIndexer {
     for (let i = 0; i < leafChunks.length; i++) {
       const chunk = leafChunks[i]
       await withTimeout(
-        bee.uploadChunk(options.batchId, chunk.data, { tag: tagUid }),
+        bee.uploadChunk(options.batchId, chunk.data, chunkUploadOptions(tagUid)),
         30_000,
         `page ${i}`,
       )
@@ -535,6 +549,17 @@ export class SqliteIndexer {
   close(): void {
     this.db.close()
   }
+}
+
+// ---------- Upload Options Helper ----------
+
+/**
+ * Build bee-js chunk upload options from an optional tag uid. When no tag is
+ * available (gateway without /tags), force `deferred=false` so Bee pushes the
+ * chunk synchronously instead of queueing it under an untracked tag.
+ */
+function chunkUploadOptions(tagUid: number | null): { tag: number } | { deferred: false } {
+  return tagUid === null ? { deferred: false } : { tag: tagUid }
 }
 
 // ---------- Timeout Helper ----------

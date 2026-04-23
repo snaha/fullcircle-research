@@ -279,5 +279,5 @@ await tryPublishFeedUpdate({
   bee,
   batchId,
   signer: loadSigner(parseFeedSignerFlag(process.argv)),
-  tagUid: syncResult.tagUid,
+  tagUid: syncResult.tagUid ?? undefined,
 })

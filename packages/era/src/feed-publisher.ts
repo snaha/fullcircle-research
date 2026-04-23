@@ -94,11 +94,10 @@ async function recoverFeedHints(
     if (!res.ok) break
     const chunk = new Uint8Array(await res.arrayBuffer())
     if (chunk.length < SOC_HEADER_LEN + 8) break
-    const ts = new DataView(
-      chunk.buffer,
-      chunk.byteOffset + SOC_HEADER_LEN,
-      8,
-    ).getBigUint64(0, false)
+    const ts = new DataView(chunk.buffer, chunk.byteOffset + SOC_HEADER_LEN, 8).getBigUint64(
+      0,
+      false,
+    )
     hint = { epoch, timestamp: ts }
     if (epoch.level === 0) break
     epoch = epoch.childAt(at)
@@ -170,8 +169,18 @@ export async function publishFeedUpdate(
   // Bee. A fresh tag per SOC is also required; reusing the sqlite sync tag
   // triggers the same hang. `swarm-postage-batch-id` is server-side
   // stamping — the batch is owned by the Bee node, not the feed signer.
-  const freshTag = await options.bee.createTag()
-  const tagUid = freshTag.uid
+  //
+  // On gateways the /tags endpoint may be unavailable; in that case we fall
+  // back to uploading with `swarm-deferred-upload: false` and no tag header.
+  let tagUid: number | null = null
+  try {
+    const freshTag = await options.bee.createTag()
+    tagUid = freshTag.uid
+  } catch (err) {
+    log(
+      `feed[${options.kind}] createTag failed (${(err as Error).message}); uploading SOC with deferred=false and no tag header`,
+    )
+  }
   const identifierObj = new Identifier(identifier)
   const cac = options.bee.makeContentAddressedChunk(payload)
   const soc = cac.toSingleOwnerChunk(identifierObj, options.signer)
@@ -185,8 +194,12 @@ export async function publishFeedUpdate(
     'content-type': 'application/octet-stream',
     'content-length': String(body.length),
     'swarm-postage-batch-id': options.batchId,
-    'swarm-tag': String(tagUid),
     connection: 'close',
+  }
+  if (tagUid !== null) {
+    headers['swarm-tag'] = String(tagUid)
+  } else {
+    headers['swarm-deferred-upload'] = 'false'
   }
   const res = await fetch(url, { method: 'POST', headers, body })
   const responseText = await res.text()
