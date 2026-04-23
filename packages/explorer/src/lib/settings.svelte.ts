@@ -23,6 +23,8 @@ declare const __BUILD_PUBLISHER__: string
 declare const __BUILD_MANIFEST__: string
 declare const __BUILD_POT__: string
 declare const __BUILD_SQLITE__: string
+// Injected at build time from FULLCIRCLE_BEE_URL env var (default: localhost:1633)
+declare const __BUILD_BEE_URL__: string
 
 export type Source = 'manifest' | 'pot' | 'sqlite'
 
@@ -40,7 +42,7 @@ const KEY_POT_META = 'fullcircle.explorer.pot.meta'
 const KEY_SQLITE_DB_REF = 'fullcircle.explorer.sqlite.dbRef'
 const KEY_SQLITE_META = 'fullcircle.explorer.sqlite.meta'
 
-const DEFAULT_BEE = 'http://localhost:1633'
+const DEFAULT_BEE = __BUILD_BEE_URL__
 const HEX64 = /^[0-9a-f]{64}$/
 const HEX40 = /^[0-9a-f]{40}$/
 const ZERO_REF = '0'.repeat(64)
