@@ -12,6 +12,8 @@ const config: KnipConfig = {
     'src/lib/utils.ts',
     // Vendored POT JS browser runtime; loaded at runtime via <script src>.
     'static/pot-web.js',
+    // Vendored sql.js-httpvfs assets; loaded at runtime via Web Worker.
+    'static/sql.js-httpvfs/**',
   ],
   ignoreExportsUsedInFile: true,
 }

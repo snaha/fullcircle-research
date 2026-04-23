@@ -8,6 +8,9 @@ node_modules
 static/pot-web.js
 static/pot.wasm
 
+# Vendored sql.js-httpvfs assets.
+static/sql.js-httpvfs/
+
 .env
 .env.*
 !.env.example

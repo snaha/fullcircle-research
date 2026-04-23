@@ -4,8 +4,10 @@
 //   - POT: three KVS lookups (byNumber / byHash / byTx) to resolve the
 //     bundle's 32-byte Swarm reference, then `/bytes/{ref}`; meta is a
 //     plain JSON chunk at `/bytes/{metaRef}`.
+//   - SQLite: sql.js queries against a database synced to Swarm as 4KB
+//     page chunks; looks up swarm_ref then fetches from `/bytes/{ref}`.
 //
-// Both paths share the same decode step (`@fullcircle/era/bundle`).
+// All paths share the same decode step (`@fullcircle/era/bundle`).
 
 import {
   computeBlockReward,
@@ -21,6 +23,14 @@ import {
 } from '@fullcircle/era/bundle'
 import { getBundleRef, type PotIndex } from './pot'
 import { settings } from './settings.svelte'
+import {
+  getRefByNumber,
+  getRefByHash,
+  getRefByTxHash,
+  hasBlockByNumber,
+  hasBlockByHash,
+  hasTx,
+} from './sqlite'
 
 export interface FetchedBlock {
   header: DecodedHeader
@@ -81,6 +91,13 @@ export async function fetchMeta(): Promise<SourceMeta> {
       if (!res.ok) return empty
       return parseMeta(await res.json(), empty)
     }
+    if (settings.source === 'sqlite') {
+      if (!/^[0-9a-f]{64}$/.test(settings.sqliteMeta)) return empty
+      const res = await fetch(`${settings.beeUrl}/bytes/${settings.sqliteMeta}`)
+      if (!res.ok) return empty
+      return parseMeta(await res.json(), empty)
+    }
+    // POT source
     if (!/^[0-9a-f]{64}$/.test(settings.potMeta)) return empty
     const res = await fetch(`${settings.beeUrl}/bytes/${settings.potMeta}`)
     if (!res.ok) return empty
@@ -123,10 +140,14 @@ export function hasGaps(meta: SourceMeta): boolean | null {
 }
 
 export async function fetchBlock(index: Index, key: string): Promise<FetchedBlock> {
-  const bytes =
-    settings.source === 'manifest'
-      ? await fetchBundleViaManifest(index, key)
-      : await fetchBundleViaPot(index, key)
+  let bytes: Uint8Array
+  if (settings.source === 'manifest') {
+    bytes = await fetchBundleViaManifest(index, key)
+  } else if (settings.source === 'sqlite') {
+    bytes = await fetchBundleViaSqlite(index, key)
+  } else {
+    bytes = await fetchBundleViaPot(index, key)
+  }
   const bundle = decodeBlockBundle(bytes)
   const header = decodeBlockHeader(bundle.rawHeader)
   const body = decodeBlockBody(bundle.rawBody)
@@ -174,10 +195,27 @@ async function fetchBundleViaPot(index: Index, key: string): Promise<Uint8Array>
   return new Uint8Array(await res.arrayBuffer())
 }
 
+async function fetchBundleViaSqlite(index: Index, key: string): Promise<Uint8Array> {
+  const options = { beeUrl: settings.beeUrl, dbRef: settings.sqliteDbRef }
+  let ref: string | null = null
+
+  if (index === 'number') ref = await getRefByNumber(key, options)
+  else if (index === 'hash') ref = await getRefByHash(key, options)
+  else if (index === 'tx') ref = await getRefByTxHash(key, options)
+
+  if (!ref) throw new Error(`not found in SQLite ${index}: ${key}`)
+  const res = await fetch(`${settings.beeUrl}/bytes/${ref}`)
+  if (!res.ok) {
+    throw new Error(`bee ${res.status} ${res.statusText}: /bytes/${ref}`)
+  }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
 /**
  * Cheap existence probe for the lookup page. For manifest we range-GET the
  * bundle (any non-404 is good enough); for POT we do a `getRaw` on the
- * appropriate KVS and check for a non-null reference.
+ * appropriate KVS and check for a non-null reference; for SQLite we query
+ * the database.
  */
 export async function probeIndex(index: Index, key: string): Promise<boolean> {
   try {
@@ -196,6 +234,14 @@ export async function probeIndex(index: Index, key: string): Promise<boolean> {
       )
       return res.status !== 404
     }
+    if (settings.source === 'sqlite') {
+      const options = { beeUrl: settings.beeUrl, dbRef: settings.sqliteDbRef }
+      if (index === 'number') return await hasBlockByNumber(key, options)
+      if (index === 'hash') return await hasBlockByHash(key, options)
+      if (index === 'tx') return await hasTx(key, options)
+      return false
+    }
+    // POT source
     const ref = await getBundleRef(POT_INDEX_MAP[index], key, {
       beeUrl: settings.beeUrl,
       refs: {

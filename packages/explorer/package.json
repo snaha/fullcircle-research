@@ -15,7 +15,8 @@
     "check:all": "pnpm lint && pnpm check && pnpm knip"
   },
   "dependencies": {
-    "@fullcircle/era": "workspace:*"
+    "@fullcircle/era": "workspace:*",
+    "sql.js-httpvfs": "^0.8.12"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
