@@ -19,7 +19,7 @@ import http, {
   type ServerResponse,
 } from 'node:http'
 
-import { UploadCache, type CachedResponse } from './cache.js'
+import { DownloadCache, UploadCache, type CachedResponse } from './cache.js'
 import { handleWsUpgrade } from './ws-proxy.js'
 
 const MAX_BUFFERED_BYTES = 64 * 1024 * 1024 // 64 MiB — bodies above this bypass cache
@@ -28,6 +28,9 @@ const MAX_BUFFERED_BYTES = 64 * 1024 * 1024 // 64 MiB — bodies above this bypa
 // response every time. We skip /feeds (mutable updates), /stamps (creates
 // state), /chunks/stream (GET + WebSocket upgrade, not POST).
 const CACHEABLE_PATH_PREFIXES = ['/bytes', '/chunks', '/bzz', '/soc']
+
+// GET endpoints where the path IS the cache key (content-addressed reads).
+const CACHEABLE_GET_PREFIXES = ['/bytes/', '/chunks/']
 
 const MAX_ATTEMPTS = 5
 const BASE_RETRY_DELAY_MS = 200
@@ -50,6 +53,7 @@ export interface ProxyConfig {
   upstreamHost: string
   upstreamPort: number
   cache?: UploadCache
+  downloadCache?: DownloadCache
 }
 
 export interface StampStats {
@@ -66,7 +70,17 @@ export function createProxyServer(cfg: ProxyConfig): Server {
     const batchId = headerOne(clientReq.headers['swarm-postage-batch-id'])
     const basePath = pathRoot(clientReq.url ?? '')
 
-    if (cfg.cache && clientReq.method === 'POST' && batchId && isCacheable(basePath)) {
+    if (cfg.downloadCache && clientReq.method === 'GET' && isCacheableGet(basePath)) {
+      void handleCacheableGet(
+        cfg,
+        agent,
+        stamps,
+        cfg.downloadCache,
+        clientReq,
+        clientRes,
+        startedNs,
+      )
+    } else if (cfg.cache && clientReq.method === 'POST' && batchId && isCacheable(basePath)) {
       void handleCacheable(cfg, agent, stamps, cfg.cache, clientReq, clientRes, {
         startedNs,
         batchId,
@@ -120,7 +134,7 @@ function handleStream(
           reqBytes,
           respBytes,
           stamps,
-          cacheTag: null,
+          cacheTag: 'cache=skip',
         })
       })
     },
@@ -134,6 +148,64 @@ function handleStream(
   })
 
   clientReq.pipe(upstreamReq)
+}
+
+async function handleCacheableGet(
+  cfg: ProxyConfig,
+  agent: http.Agent,
+  stamps: Map<string, StampStats>,
+  downloadCache: DownloadCache,
+  clientReq: IncomingMessage,
+  clientRes: ServerResponse,
+  startedNs: bigint,
+): Promise<void> {
+  const path = pathRoot(clientReq.url ?? '')
+  try {
+    const cached = downloadCache.lookup(path)
+    if (cached) {
+      writeCached(clientRes, cached)
+      logRequest(clientReq, cached.status, elapsedMs(startedNs), {
+        reqBytes: 0,
+        respBytes: cached.body.length,
+        stamps,
+        cacheTag: 'cache=hit',
+      })
+      return
+    }
+
+    const result = await sendUpstreamOnce(
+      cfg,
+      agent,
+      'GET',
+      clientReq.url ?? '',
+      forwardHeaders(clientReq.headers, cfg),
+      Buffer.alloc(0),
+    )
+    clientRes.writeHead(result.status, {
+      ...result.filteredHeaders,
+      'content-length': result.body.length,
+    })
+    clientRes.end(result.body)
+
+    const isSuccess = result.status >= 200 && result.status < 300
+    if (isSuccess) {
+      downloadCache.store(path, {
+        status: result.status,
+        headers: result.filteredHeaders,
+        body: result.body,
+      })
+    }
+    logRequest(clientReq, result.status, elapsedMs(startedNs), {
+      reqBytes: 0,
+      respBytes: result.body.length,
+      stamps,
+      cacheTag: isSuccess ? 'cache=miss' : 'cache=skip',
+    })
+  } catch (err) {
+    const e = err as Error
+    failUpstream(clientRes, e)
+    process.stderr.write(`GET ${clientReq.url} -> ERR ${e.message} (${elapsedMs(startedNs)}ms)\n`)
+  }
 }
 
 interface CacheableCtx {
@@ -354,6 +426,10 @@ function pathRoot(url: string): string {
 
 function isCacheable(path: string): boolean {
   return CACHEABLE_PATH_PREFIXES.some((p) => path === p || path.startsWith(p + '/'))
+}
+
+function isCacheableGet(path: string): boolean {
+  return CACHEABLE_GET_PREFIXES.some((p) => path.startsWith(p) && path.length > p.length)
 }
 
 function headerOne(h: string | string[] | undefined): string | null {

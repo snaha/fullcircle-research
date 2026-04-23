@@ -109,3 +109,55 @@ export class UploadCache {
     this.db.close()
   }
 }
+
+// Caches GET responses for content-addressed endpoints (/bytes/{ref},
+// /chunks/{ref}). Keyed by path only — same ref always returns same bytes.
+export class DownloadCache {
+  private readonly db: DatabaseSync
+  private readonly lookupStmt: StatementSync
+  private readonly insertStmt: StatementSync
+
+  constructor(path: string) {
+    mkdirSync(dirname(path), { recursive: true })
+    this.db = new DatabaseSync(path)
+    this.db.exec('PRAGMA journal_mode = WAL')
+    this.db.exec('PRAGMA synchronous = NORMAL')
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS download_cache (
+        path        TEXT    NOT NULL PRIMARY KEY,
+        status      INTEGER NOT NULL,
+        headers     TEXT    NOT NULL,
+        body        BLOB    NOT NULL,
+        created_at  INTEGER NOT NULL
+      )
+    `)
+    this.lookupStmt = this.db.prepare(
+      'SELECT status, headers, body FROM download_cache WHERE path=?',
+    )
+    this.insertStmt = this.db.prepare(
+      `INSERT OR REPLACE INTO download_cache
+         (path, status, headers, body, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+  }
+
+  lookup(path: string): CachedResponse | null {
+    const row = this.lookupStmt.get(path) as
+      | { status: number; headers: string; body: Uint8Array }
+      | undefined
+    if (!row) return null
+    return {
+      status: row.status,
+      headers: JSON.parse(row.headers) as Record<string, string>,
+      body: Buffer.from(row.body),
+    }
+  }
+
+  store(path: string, resp: CachedResponse): void {
+    this.insertStmt.run(path, resp.status, JSON.stringify(resp.headers), resp.body, Date.now())
+  }
+
+  close(): void {
+    this.db.close()
+  }
+}

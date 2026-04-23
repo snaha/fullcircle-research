@@ -3,7 +3,7 @@
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { UploadCache } from './cache.js'
+import { DownloadCache, UploadCache } from './cache.js'
 import { createProxyServer, type ProxyConfig } from './proxy.js'
 
 const USAGE = `swarm-dev-proxy — forward HTTP proxy for the Bee API
@@ -24,20 +24,26 @@ Options:
 const DEFAULT_DATA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../data')
 
 const parsed = parseArgs(process.argv.slice(2))
-const cache = parsed.cacheDb === 'off' ? undefined : new UploadCache(parsed.cacheDb)
+const cacheEnabled = parsed.cacheDb !== 'off'
+const cache = cacheEnabled ? new UploadCache(parsed.cacheDb) : undefined
+const downloadCacheDb = defaultDownloadCacheDb(parsed.upstreamHost, parsed.upstreamPort)
+const downloadCache = cacheEnabled ? new DownloadCache(downloadCacheDb) : undefined
 const cfg: ProxyConfig = {
   listenHost: parsed.listenHost,
   listenPort: parsed.listenPort,
   upstreamHost: parsed.upstreamHost,
   upstreamPort: parsed.upstreamPort,
   cache,
+  downloadCache,
 }
 const server = createProxyServer(cfg)
 server.listen(cfg.listenPort, cfg.listenHost, () => {
-  const cacheLabel = cache ? parsed.cacheDb : 'disabled'
+  const uploadLabel = cache ? parsed.cacheDb : 'disabled'
+  const downloadLabel = downloadCache ? downloadCacheDb : 'disabled'
   process.stderr.write(
     `swarm-dev-proxy listening on http://${cfg.listenHost}:${cfg.listenPort}` +
-      ` -> http://${cfg.upstreamHost}:${cfg.upstreamPort} (cache: ${cacheLabel})\n`,
+      ` -> http://${cfg.upstreamHost}:${cfg.upstreamPort}` +
+      ` (upload-cache: ${uploadLabel}, download-cache: ${downloadLabel})\n`,
   )
 })
 
@@ -45,6 +51,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     server.close()
     cache?.close()
+    downloadCache?.close()
     process.exit(0)
   })
 }
@@ -93,6 +100,12 @@ function defaultCacheDb(upstreamHost: string, upstreamPort: number): string {
   const dataDir = process.env.FULLCIRCLE_DATA_DIR ?? DEFAULT_DATA_DIR
   const safeHost = upstreamHost.replace(/[^a-zA-Z0-9.-]/g, '_')
   return resolve(dataDir, `proxy-cache-${safeHost}_${upstreamPort}.db`)
+}
+
+function defaultDownloadCacheDb(upstreamHost: string, upstreamPort: number): string {
+  const dataDir = process.env.FULLCIRCLE_DATA_DIR ?? DEFAULT_DATA_DIR
+  const safeHost = upstreamHost.replace(/[^a-zA-Z0-9.-]/g, '_')
+  return resolve(dataDir, `proxy-download-cache-${safeHost}_${upstreamPort}.db`)
 }
 
 function requireValue(args: string[], i: number, flag: string): string {

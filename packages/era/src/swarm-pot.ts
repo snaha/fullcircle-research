@@ -223,6 +223,11 @@ export async function addBlocksToPot(
   let blocksUploaded = 0
   let txHashesIndexed = 0
 
+  const startedAt = Date.now()
+  let windowStartAt = startedAt
+  let windowStartBlocks = 0
+  let windowStartTxs = 0
+
   for await (const block of readBlocksNdjson(blocksPath)) {
     const bundleBytes = encodeBlockBundle({
       rawHeader: hexToBytes(block.rawHeader),
@@ -253,7 +258,21 @@ export async function addBlocksToPot(
 
     blocksUploaded++
     if (blocksUploaded % 100 === 0) {
-      log(`uploaded ${blocksUploaded} blocks, ${txHashesIndexed} tx hashes indexed`)
+      const now = Date.now()
+      const windowMs = Math.max(1, now - windowStartAt)
+      const windowBlocks = blocksUploaded - windowStartBlocks
+      const windowTxs = txHashesIndexed - windowStartTxs
+      const totalMs = Math.max(1, now - startedAt)
+      log(
+        `uploaded ${blocksUploaded} blocks, ${txHashesIndexed} txs` +
+          ` (window ${windowBlocks} blk / ${windowTxs} tx in ${windowMs} ms,` +
+          ` ${((windowBlocks / windowMs) * 1000).toFixed(1)} blk/s,` +
+          ` ${((windowTxs / windowMs) * 1000).toFixed(0)} tx/s;` +
+          ` avg ${((blocksUploaded / totalMs) * 1000).toFixed(1)} blk/s)`,
+      )
+      windowStartAt = now
+      windowStartBlocks = blocksUploaded
+      windowStartTxs = txHashesIndexed
     }
   }
 
