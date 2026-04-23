@@ -236,20 +236,25 @@ vs. the [erae spec page](https://hackmd.io/pIZlxnitSciV5wUgW6W20w):
 
 ## Local Bee node
 
-A local single-node Swarm setup (queen only) via
-[`@fairdatasociety/fdp-play`](https://www.npmjs.com/package/@fairdatasociety/fdp-play).
-Requires Docker.
+A docker compose stack with a local dev blockchain
+([`fairdatasociety/fdp-play-blockchain`](https://hub.docker.com/r/fairdatasociety/fdp-play-blockchain))
+and the latest upstream Bee. Identity keys for the queen (and four optional
+workers) are vendored from fdp-play so the chequebook is pre-funded by the
+chain genesis. See [`docker/`](./docker/) for the compose file, Dockerfile, and
+helper scripts.
 
 ```bash
-pnpm bee:start          # queen only, foreground (streams logs)
-pnpm bee:start:detach   # same, background
-pnpm bee:stop           # stop node
-pnpm bee:logs           # follow queen logs
-pnpm bee:fresh          # clean start: purge data + pull latest images
+pnpm bee:start           # queen only, detached
+pnpm bee:start:workers   # also bring up 4 workers, resolves bootnode automatically
+pnpm bee:stop            # stop all services
+pnpm bee:logs            # follow queen logs
+pnpm bee:fresh           # nuke volumes, pull + rebuild images, restart queen
+pnpm bee:stamp           # buy a postage stamp on the queen
 ```
 
 Endpoints: queen API at `http://localhost:1633`, local blockchain RPC at
-`http://localhost:9545`.
+`http://localhost:9545`. Workers (when enabled) expose APIs on
+`http://localhost:{1,2,3,4}1633`.
 
 ## Scripts
 
@@ -258,7 +263,7 @@ Endpoints: queen API at `http://localhost:1633`, local blockchain RPC at
 - `pnpm era:download [range|url]` — fetch only
 - `pnpm era:process [range|url]` — parse cached files only
 - `pnpm era:download-and-process [range|url]` — both
-- `pnpm bee:start` / `bee:stop` / `bee:logs` / `bee:fresh` — local Bee node
+- `pnpm bee:start` / `bee:start:workers` / `bee:stop` / `bee:logs` / `bee:fresh` / `bee:stamp` — local Bee stack
 - `pnpm lint` / `pnpm format` / `pnpm knip` / `pnpm check:all` — run tooling
   across every package that defines the matching script
 

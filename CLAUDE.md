@@ -12,7 +12,6 @@ Project issue: https://github.com/ethersphere/swarm-accelerator/issues/5
 - **[docs/PROPOSAL.md](./docs/PROPOSAL.md)** -- Implementation proposal: TypeScript tooling, architecture options, and day-by-day PoC plan
 - **[docs/INCENTIVIZATION.md](./docs/INCENTIVIZATION.md)** -- Sustainability research: funding models, endowment design, Data DAO structure, and hybrid approaches for perpetual storage
 - **[docs/SCALE.md](./docs/SCALE.md)** -- PoC vs mainnet: scale ceiling of the current in-memory Mantaray design and the LSM-backed architecture needed for the full archive (25M blocks / 3.5B txs)
-- **[docs/PLAYGROUND.md](./docs/PLAYGROUND.md)** -- Plan for replacing `@fairdatasociety/fdp-play`: our own Bee docker image + compose stack + GHCR auto-publish pipeline on upstream Bee releases
 - **[README.md](./README.md)** -- How to run the erae-processing tooling
 
 ## Context
@@ -36,7 +35,7 @@ Package manager: **pnpm** (not npm). Root scripts:
 - `pnpm era:download [range|url]` -- download only
 - `pnpm era:process [range|url]` -- parse cached files only
 - `pnpm era:download-and-process [range|url]` -- both
-- `pnpm bee:start` -- boot local single Swarm node (queen only) via `@fairdatasociety/fdp-play`; queen API on `:1633`. Also `bee:start:detach`, `bee:stop`, `bee:logs`, `bee:fresh`.
+- `pnpm bee:start` -- boot the local Bee stack (geth dev chain + queen) via [`docker/compose.yml`](./docker/compose.yml); queen API on `:1633`, chain RPC on `:9545`. Also `bee:start:workers` (4 workers behind a profile), `bee:stop`, `bee:logs`, `bee:fresh`, `bee:stamp`.
 - `pnpm lint` / `pnpm format` / `pnpm knip` / `pnpm check:all` -- forward via `pnpm -r --if-present` to every package that defines the matching script.
 
 ## Tooling (prettier, eslint, knip)
