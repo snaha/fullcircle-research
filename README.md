@@ -19,9 +19,10 @@ packages/
     src/process.ts               CLI entry: parse cached erae file(s) → JSON artefacts
     src/download-and-process.ts  CLI entry: both in one pass
     src/cli-shared.ts            shared helpers (targets, writers, range parsing)
-  proxy/                         @fullcircle/proxy — HTTP proxy in front of any Bee
+  proxy/                         @fullcircle/proxy — HTTP + WebSocket proxy in front of any Bee
     src/bin.ts                   CLI entry (--listen / --upstream / --cache-db)
-    src/proxy.ts                 streaming forward + upload-dedup handler
+    src/proxy.ts                 HTTP: streaming forward + upload-dedup + retry
+    src/ws-proxy.ts              WS:   /chunks/stream forward + per-frame cache + reconnect
     src/cache.ts                 node:sqlite upload-response cache
 docs/              research (RESEARCH, PROPOSAL, INCENTIVIZATION)
 data/              gitignored artefact cache (downloads + processed output + proxy-cache.db)
@@ -267,17 +268,37 @@ sits between any uploader (era CLIs, bee-js apps, `curl`) and a Bee node —
 local queen, self-hosted, whatever. Two things it does, both useful in
 production and not just during development:
 
-- **Upload dedup.** Responses to `POST /bytes | /chunks | /bzz` are cached in a
-  local SQLite database keyed by `(sha256(body), batch_id, path)`. Bee is
-  content-addressed, so re-uploading the same bytes under the same batch is
-  wasted work — the cached reference is identical to what the node would
-  return. This matters whenever chunks repeat: POT `save()` re-uploading
-  unchanged nodes, resumed / retried era uploads, incremental runs. Only 2xx
-  responses are stored; non-success passes through unchanged.
-- **Observability.** Every request is logged to stderr with method, path,
-  status, latency, byte counts, postage batch id, and a running per-batch
-  tally:
+- **Upload dedup (HTTP).** Responses to the content-addressed POST endpoints
+  (`/bytes`, `/chunks`, `/bzz`, `/soc/{owner}/{id}`) are cached in a local
+  SQLite database keyed by `(sha256(body), batch_id, path)`. Bee returns the
+  same reference for the same bytes under the same batch, so re-uploading is
+  wasted work — the proxy short-circuits the round-trip. This matters
+  whenever chunks repeat: POT `save()` re-uploading unchanged nodes, resumed
+  / retried era uploads, incremental runs. Only 2xx responses are stored;
+  non-success passes through unchanged. Mutable endpoints (`/feeds`,
+  `/stamps`) are never cached.
+- **Upload dedup (WebSocket).** `/chunks/stream` is also proxied with
+  per-frame caching. Each binary frame is hashed; a cache hit synthesises
+  the empty ack without touching upstream, a miss forwards and stores on
+  ack. Acks are drained to the client in FIFO order so hits can't overtake
+  unacked misses. This is how the heavy path — manifest and state trees
+  uploading ~65k chunks via era — actually sees cache benefit.
+- **Retry / reconnect.** On connection-level upstream failures
+  (`ECONNRESET`, `ETIMEDOUT`, …) the proxy retries with exponential backoff
+  — 5 attempts, 200ms base. On the WS path, if upstream drops mid-stream
+  the proxy reconnects and replays still-pending frames in order. Bee is
+  content-addressed so retries are idempotent, and the client sees a
+  single continuous session.
+- **Per-upstream cache.** The default DB path includes the upstream —
+  `data/proxy-cache-<host>_<port>.db` — so switching `--upstream` between
+  your queen, a mainnet node, and a staging box doesn't cross-contaminate
+  caches. Override with `--cache-db PATH` when you want to share one.
+- **Observability.** Every HTTP request is logged to stderr with method,
+  path, status, latency, byte counts, postage batch id, and a running
+  per-batch tally:
   `POST /bytes -> 201 (1ms req=1105B resp=82B) stamp=b3075c73 #688 up=1105B total_up=465625B cache=hit`
+  Each WS session prints an open + close line with total frames and the
+  hit/miss split.
 
 Point uploaders at `http://localhost:1733` instead of `:1633`:
 
@@ -288,9 +309,10 @@ pnpm proxy:dev                                            # tsx watch mode
 ```
 
 Flags: `--listen HOST:PORT` (default `127.0.0.1:1733`), `--upstream HOST:PORT`
-(default `127.0.0.1:1633`), `--cache-db PATH` (default
-`data/proxy-cache.db`; set to `off` to disable caching). The cache honours
-`FULLCIRCLE_DATA_DIR`; delete the `.db` file to reset.
+(default `127.0.0.1:1633`), `--cache-db PATH` (default per-upstream, see
+above; set to `off` to disable caching). The data dir honours
+`FULLCIRCLE_DATA_DIR`; delete the matching `.db` file to reset that
+upstream's cache.
 
 Plain HTTP upstream only — for HTTPS gateways, front your own local Bee.
 
@@ -302,7 +324,7 @@ Plain HTTP upstream only — for HTTPS gateways, front your own local Bee.
 - `pnpm era:process [range|url]` — parse cached files only
 - `pnpm era:download-and-process [range|url]` — both
 - `pnpm bee:start` / `bee:start:workers` / `bee:stop` / `bee:logs` / `bee:fresh` / `bee:stamp` — local Bee stack
-- `pnpm proxy:start` / `proxy:dev` — upload proxy in front of any Bee (SQLite-cached chunk dedup + request log)
+- `pnpm proxy:start` / `proxy:dev` — upload proxy in front of any Bee (HTTP + WS dedup, reconnecting, SQLite-backed)
 - `pnpm lint` / `pnpm format` / `pnpm knip` / `pnpm check:all` — run tooling
   across every package that defines the matching script
 
