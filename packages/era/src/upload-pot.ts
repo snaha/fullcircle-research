@@ -220,28 +220,24 @@ console.log(
 )
 console.log(`       written:  ${metaPath}`)
 
+// Upload an envelope JSON carrying all four POT refs; the feed stores only
+// its ref. The explorer fetches and parses it at lookup time.
 const signer = loadSigner(parseFeedSignerFlag(process.argv))
-if (signer) {
-  const envelopeRef = await uploadPotEnvelope(bee, batchId, {
-    byNumber: indexRefs.byNumber,
-    byHash: indexRefs.byHash,
-    byTx: indexRefs.byTx,
-    meta: indexRefs.meta,
-  })
+const envelopeRef = signer
+  ? await uploadPotEnvelope(bee, batchId, {
+      byNumber: indexRefs.byNumber,
+      byHash: indexRefs.byHash,
+      byTx: indexRefs.byTx,
+      meta: indexRefs.meta,
+    })
+  : null
+if (envelopeRef) {
   console.log(`       envelope: ${envelopeRef}`)
-  await tryPublishFeedUpdate({
-    kind: 'pot',
-    referenceHex: envelopeRef,
-    bee,
-    batchId,
-    signer,
-  })
-} else {
-  await tryPublishFeedUpdate({
-    kind: 'pot',
-    referenceHex: indexRefs.byNumber,
-    bee,
-    batchId,
-    signer: null,
-  })
 }
+await tryPublishFeedUpdate({
+  kind: 'pot',
+  referenceHex: envelopeRef ?? '0'.repeat(64),
+  bee,
+  batchId,
+  signer,
+})
