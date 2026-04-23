@@ -14,7 +14,8 @@ import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
-import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
+import { DATA_DIR, header, parseFeedSignerFlag, resolveTargets, type Target } from './cli-shared.js'
+import { loadSigner, tryPublishFeedUpdate, uploadPotEnvelope } from './feed-publisher.js'
 import {
   addBlocksToPot,
   getPotBlockRange,
@@ -218,3 +219,25 @@ console.log(
   `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${formatDuration(elapsed)}`,
 )
 console.log(`       written:  ${metaPath}`)
+
+// Upload an envelope JSON carrying all four POT refs; the feed stores only
+// its ref. The explorer fetches and parses it at lookup time.
+const signer = loadSigner(parseFeedSignerFlag(process.argv))
+const envelopeRef = signer
+  ? await uploadPotEnvelope(bee, batchId, {
+      byNumber: indexRefs.byNumber,
+      byHash: indexRefs.byHash,
+      byTx: indexRefs.byTx,
+      meta: indexRefs.meta,
+    })
+  : null
+if (envelopeRef) {
+  console.log(`       envelope: ${envelopeRef}`)
+}
+await tryPublishFeedUpdate({
+  kind: 'pot',
+  referenceHex: envelopeRef ?? '0'.repeat(64),
+  bee,
+  batchId,
+  signer,
+})

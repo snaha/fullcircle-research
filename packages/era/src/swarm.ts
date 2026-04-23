@@ -198,7 +198,7 @@ export async function openManifest(
       if (hit) return new Uint8Array(hit)
       const cached = await readCachedChunk(refHex)
       if (cached) return cached
-      return new Uint8Array(await bee.downloadData(refHex))
+      return (await bee.downloadData(refHex)).toUint8Array()
     }
     await root.load(snapLoader, existingRef)
     await loadAllNodes(snapLoader, root)
@@ -206,7 +206,7 @@ export async function openManifest(
     const counters = { hits: 0, misses: 0 }
     const storageLoader = cacheEnabled
       ? makeCachedLoader(bee, counters)
-      : async (ref: Reference) => new Uint8Array(await bee.downloadData(bytesToHex(ref)))
+      : async (ref: Reference) => (await bee.downloadData(bytesToHex(ref))).toUint8Array()
     await root.load(storageLoader, existingRef)
     // `load` only materializes the root node; descendants stay lazy. If we
     // start adding forks without hydrating the tree, unloaded subtrees get
@@ -279,7 +279,7 @@ export async function addBlocksToManifest(
       totalDifficulty: block.totalDifficulty === null ? null : BigInt(block.totalDifficulty),
     })
     const uploadResult = await bee.uploadData(options.batchId, bundleBytes)
-    const ref = hexToBytes(uploadResult.reference) as Reference
+    const ref = uploadResult.reference.toUint8Array() as Reference
     const leafMeta = { 'Content-Type': 'application/octet-stream' }
 
     manifest.numberManifest.addFork(textEncoder.encode(block.number), ref, leafMeta)
@@ -460,7 +460,7 @@ export async function addBalanceEventsToManifest(
       }
       const bytes = textEncoder.encode(JSON.stringify(record))
       const { reference } = await bee.uploadData(options.batchId, bytes)
-      const ref = hexToBytes(reference.toString()) as Reference
+      const ref = reference.toUint8Array() as Reference
       const normalizedAddr = addr.toLowerCase().replace(/^0x/, '')
       manifest.addressManifest.addFork(textEncoder.encode(normalizedAddr), ref, leafMeta)
     },
@@ -477,7 +477,7 @@ export async function addBalanceEventsToManifest(
       const record: BlockEventsRecord = { block: blockStr, events }
       const bytes = textEncoder.encode(JSON.stringify(record))
       const { reference } = await bee.uploadData(options.batchId, bytes)
-      const ref = hexToBytes(reference.toString()) as Reference
+      const ref = reference.toUint8Array() as Reference
       manifest.balanceBlockManifest.addFork(textEncoder.encode(blockStr), ref, leafMeta)
     },
     (done, total) => log(`  blocks ${done}/${total}`),
@@ -525,7 +525,7 @@ export async function writeBlockRangeMeta(
   }
   const metaBytes = textEncoder.encode(JSON.stringify(meta))
   const { reference } = await bee.uploadData(options.batchId, metaBytes)
-  manifest.metaRef = hexToBytes(reference) as Reference
+  manifest.metaRef = reference.toUint8Array() as Reference
   log(
     `meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock} blockCount=${meta.blockCount}` +
       ` txCount=${meta.txCount} addressCount=${meta.addressCount} eventCount=${meta.eventCount}`,
@@ -749,7 +749,7 @@ function bytesStartWith(haystack: Uint8Array, prefix: Uint8Array): boolean {
 
 async function loadStatsFromMeta(bee: Bee, metaRef: Reference): Promise<ManifestStats> {
   try {
-    const bytes = new Uint8Array(await bee.downloadData(bytesToHex(metaRef)))
+    const bytes = (await bee.downloadData(bytesToHex(metaRef))).toUint8Array()
     const parsed = JSON.parse(textDecoder.decode(bytes)) as Partial<ManifestMeta>
     return {
       firstBlock: parsed.firstBlock !== undefined ? BigInt(parsed.firstBlock) : null,
@@ -772,7 +772,7 @@ function makeUploadFn(
 ): (data: Uint8Array) => Promise<Reference> {
   const rawHttpUpload = async (data: Uint8Array) => {
     const result = await bee.uploadData(batchId, data)
-    return hexToBytes(result.reference) as Reference
+    return result.reference.toUint8Array() as Reference
   }
   // Manifest nodes are almost always ≤4 KB (one chunk). The rare fatter node
   // spills into a Swarm tree whose root ref we can only get from /bytes —
@@ -1070,7 +1070,7 @@ function makeCachedLoader(
       return cached
     }
     counters.misses++
-    const data = new Uint8Array(await bee.downloadData(refHex))
+    const data = (await bee.downloadData(refHex)).toUint8Array()
     await writeCachedChunk(refHex, data)
     return data
   }

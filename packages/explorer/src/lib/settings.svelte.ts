@@ -11,11 +11,13 @@
 //              on-demand from Swarm.
 
 import { browser } from '$app/environment'
+import { resolveLatest } from './feed-resolver'
 
 export type Source = 'manifest' | 'pot' | 'sqlite'
 
 const KEY_BEE = 'fullcircle.explorer.beeUrl'
 const KEY_SOURCE = 'fullcircle.explorer.source'
+const KEY_PUBLISHER = 'fullcircle.explorer.publisherAddress'
 const KEY_MANIFEST = 'fullcircle.explorer.manifestRef'
 const KEY_POT_BY_NUMBER = 'fullcircle.explorer.pot.byNumber'
 const KEY_POT_BY_HASH = 'fullcircle.explorer.pot.byHash'
@@ -26,6 +28,7 @@ const KEY_SQLITE_META = 'fullcircle.explorer.sqlite.meta'
 
 const DEFAULT_BEE = 'http://localhost:1633'
 const HEX64 = /^[0-9a-f]{64}$/
+const HEX40 = /^[0-9a-f]{40}$/
 const ZERO_REF = '0'.repeat(64)
 
 function load(key: string, fallback: string): string {
@@ -43,6 +46,7 @@ function loadSource(): Source {
 export const settings = $state({
   beeUrl: load(KEY_BEE, DEFAULT_BEE),
   source: loadSource(),
+  publisherAddress: load(KEY_PUBLISHER, ''),
   manifestRef: load(KEY_MANIFEST, ''),
   potByNumber: load(KEY_POT_BY_NUMBER, ''),
   potByHash: load(KEY_POT_BY_HASH, ''),
@@ -55,6 +59,7 @@ export const settings = $state({
 export interface SaveArgs {
   beeUrl: string
   source: Source
+  publisherAddress: string
   manifestRef: string
   potByNumber: string
   potByHash: string
@@ -67,6 +72,7 @@ export interface SaveArgs {
 export function saveSettings(args: SaveArgs): void {
   settings.beeUrl = args.beeUrl.trim().replace(/\/$/, '')
   settings.source = args.source
+  settings.publisherAddress = normAddress(args.publisherAddress)
   settings.manifestRef = normHex(args.manifestRef)
   settings.potByNumber = normHex(args.potByNumber)
   settings.potByHash = normHex(args.potByHash)
@@ -77,6 +83,7 @@ export function saveSettings(args: SaveArgs): void {
   if (browser) {
     localStorage.setItem(KEY_BEE, settings.beeUrl)
     localStorage.setItem(KEY_SOURCE, settings.source)
+    localStorage.setItem(KEY_PUBLISHER, settings.publisherAddress)
     localStorage.setItem(KEY_MANIFEST, settings.manifestRef)
     localStorage.setItem(KEY_POT_BY_NUMBER, settings.potByNumber)
     localStorage.setItem(KEY_POT_BY_HASH, settings.potByHash)
@@ -87,12 +94,56 @@ export function saveSettings(args: SaveArgs): void {
   }
 }
 
+/**
+ * Write a single ref field back to `settings` and localStorage. Used after
+ * feed resolution so the resolved values are kept across reloads.
+ */
+function updateRef(key: string, value: string): void {
+  if (browser) localStorage.setItem(key, value)
+}
+
+/**
+ * Resolve the active source's refs from the publisher's epoch feed. Writes
+ * the result into `settings` and localStorage so the explorer behaves as if
+ * the user had pasted them manually. Does nothing if publisherAddress is
+ * empty. Throws on feed-resolution errors so callers can surface them.
+ */
+export async function resolveActiveSourceFromFeed(): Promise<void> {
+  if (!isAddress(settings.publisherAddress)) return
+  const resolved = await resolveLatest(settings.beeUrl, settings.publisherAddress, settings.source)
+  if (resolved.kind === 'manifest') {
+    settings.manifestRef = resolved.manifestRef
+    updateRef(KEY_MANIFEST, resolved.manifestRef)
+  } else if (resolved.kind === 'sqlite') {
+    settings.sqliteDbRef = resolved.dbRef
+    updateRef(KEY_SQLITE_DB_REF, resolved.dbRef)
+  } else {
+    settings.potByNumber = resolved.byNumber
+    settings.potByHash = resolved.byHash
+    settings.potByTx = resolved.byTx
+    settings.potMeta = resolved.meta ?? ''
+    updateRef(KEY_POT_BY_NUMBER, resolved.byNumber)
+    updateRef(KEY_POT_BY_HASH, resolved.byHash)
+    updateRef(KEY_POT_BY_TX, resolved.byTx)
+    updateRef(KEY_POT_META, resolved.meta ?? '')
+  }
+}
+
 function normHex(s: string): string {
   return s.trim().toLowerCase().replace(/^0x/, '')
 }
 
+function normAddress(s: string): string {
+  const hex = s.trim().toLowerCase().replace(/^0x/, '')
+  return HEX40.test(hex) ? hex : ''
+}
+
 export function isHex64(s: string): boolean {
   return HEX64.test(s)
+}
+
+export function isAddress(s: string): boolean {
+  return HEX40.test(s)
 }
 
 /** True when the selected source has the minimum refs needed to serve blocks. */

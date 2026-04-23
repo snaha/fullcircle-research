@@ -15,7 +15,9 @@
     "check:all": "pnpm lint && pnpm check && pnpm knip"
   },
   "dependencies": {
+    "@ethersphere/bee-js": "^11.1.1",
     "@fullcircle/era": "workspace:*",
+    "@snaha/swarm-id": "^0.1.2",
     "sql.js-httpvfs": "^0.8.12"
   },
   "devDependencies": {

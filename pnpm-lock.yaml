@@ -115,8 +115,8 @@ importers:
         specifier: 10.1.1
         version: 10.1.1
       '@ethersphere/bee-js':
-        specifier: ^8.0.0
-        version: 8.3.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+        specifier: ^11.1.1
+        version: 11.2.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@noble/curves':
         specifier: ^1.9.1
         version: 1.9.1
@@ -172,9 +172,15 @@ importers:
 
   packages/explorer:
     dependencies:
+      '@ethersphere/bee-js':
+        specifier: ^11.1.1
+        version: 11.2.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@fullcircle/era':
         specifier: workspace:*
         version: link:../era
+      '@snaha/swarm-id':
+        specifier: ^0.1.2
+        version: 0.1.2(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       sql.js-httpvfs:
         specifier: ^0.8.12
         version: 0.8.12
@@ -558,6 +564,10 @@ packages:
   '@ethereumjs/vm@10.1.1':
     resolution: {integrity: sha512-OFr7+3pHgkzTAIXTBXr5UwerKJhrwcQEV/vHrd9jtnPVSdkZQKCttTWXwA/lqEcOGlNVenTLcWNYasdmXOU9lg==}
     engines: {node: '>=20'}
+
+  '@ethersphere/bee-js@11.2.0':
+    resolution: {integrity: sha512-Cn1NCy6/g+LzTXBWxFftT7OWfCj4CXGK5lo3VHVp0v3erytFqoBQkKLZ1TiwE4En5/voN7GCe5kjy3El8l8lRA==}
+    engines: {bee: 2.4.0-390a402e, beeApiVersion: 7.2.0}
 
   '@ethersphere/bee-js@8.3.1':
     resolution: {integrity: sha512-HIyEzYQmDynFoD0+yXMtNkSBTwdRIKZZs1cZ6H85BAI1eKEXt2dGy+t/IzsUAa5oLq1K7uyoaawaaLZMJqlfrQ==}
@@ -1005,6 +1015,10 @@ packages:
   '@scure/bip39@1.6.0':
     resolution: {integrity: sha512-+lF0BbLiJNwVlev4eKelw1WWLaiKXw7sSl8T6FvBlWkdX+94aGJ4o8XjUdlyhTCjd8c+B3KT3JfS8P0bLRNU6A==}
 
+  '@snaha/swarm-id@0.1.2':
+    resolution: {integrity: sha512-JRr7FVovnGlUxQp9eqos2Z0D62POgBTIEXt3B+414/BhtTaAD8zzYfVd6j2Za9x9CU2gvDMFL0KEY8Wh9jVe5g==}
+    engines: {node: '>=22', pnpm: 10.x}
+
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -1304,6 +1318,9 @@ packages:
   axios@0.28.1:
     resolution: {integrity: sha512-iUcGA5a7p0mVb4Gm/sy+FSECNkPFT4y7wt6OM/CDpO/OnNCvSs3PoMG8ibrC9jRoGYU0gUK5pXVC4NPXq6lHRQ==}
 
+  axios@0.30.3:
+    resolution: {integrity: sha512-5/tmEb6TmE/ax3mdXBc/Mi6YdPGxQsv+0p5YlciXWt3PHIn0VamqCXhRMtScnwY3lbgSXLneOuXAKUhgmSRpwg==}
+
   axobject-query@4.1.0:
     resolution: {integrity: sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ==}
     engines: {node: '>= 0.4'}
@@ -1360,6 +1377,12 @@ packages:
 
   cafe-utility@23.12.0:
     resolution: {integrity: sha512-B8MHryv6dDTw8GRfJxHLy4zzhewEEYulPAXiSRqkNCeqXFoQAk8THhlU00Yk7dvc8bppnHoS7FaQ468dfGfe6A==}
+
+  cafe-utility@33.3.2:
+    resolution: {integrity: sha512-7hn8OrmKsJ4pASe0Y9/k+DIABZcK1jkviLyQq6VM+uJQF4jMT0E+vCVkTsMyIrYDFJ21ne1HGZVP9NwDASr7jA==}
+
+  cafe-utility@33.9.0:
+    resolution: {integrity: sha512-MrTuoypjKKnfJg7CqbPbN2ugXuPp0qG5mLdJMjG9GzeGhMDBxD3xhM4EnmPh7+rH4sFqx29c4caxg3oU+eT/Zw==}
 
   call-bind-apply-helpers@1.0.2:
     resolution: {integrity: sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==}
@@ -2490,6 +2513,9 @@ packages:
   zimmerframe@1.1.4:
     resolution: {integrity: sha512-B58NGBEoc8Y9MWWCQGl/gq9xBCe4IiKM0a2x7GZdQKOW5Exr8S1W24J6OgM1njK8xCRGvAJIL/MxXHf6SkmQKQ==}
 
+  zod@4.1.13:
+    resolution: {integrity: sha512-AvvthqfqrAhNH9dnfmrfKzX5upOdjUVJYFqNSlkmGf64gRaTzlPwz99IHYnVs28qYAybvAlBV+H7pn0saFY4Ig==}
+
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
@@ -2740,6 +2766,19 @@ snapshots:
       eventemitter3: 5.0.1
     transitivePeerDependencies:
       - supports-color
+
+  '@ethersphere/bee-js@11.2.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)':
+    dependencies:
+      axios: 0.30.3(debug@4.4.3)
+      cafe-utility: 33.9.0
+      debug: 4.4.3
+      isomorphic-ws: 4.0.1(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      semver: 7.7.4
+      ws: 8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
 
   '@ethersphere/bee-js@8.3.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)':
     dependencies:
@@ -3040,6 +3079,16 @@ snapshots:
     dependencies:
       '@noble/hashes': 1.8.0
       '@scure/base': 1.2.6
+
+  '@snaha/swarm-id@0.1.2(bufferutil@4.1.0)(utf-8-validate@5.0.10)':
+    dependencies:
+      '@ethersphere/bee-js': 11.2.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      cafe-utility: 33.3.2
+      zod: 4.1.13
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
 
   '@standard-schema/spec@1.1.0': {}
 
@@ -3437,7 +3486,15 @@ snapshots:
 
   axios@0.28.1:
     dependencies:
-      follow-redirects: 1.16.0
+      follow-redirects: 1.16.0(debug@4.4.3)
+      form-data: 4.0.5
+      proxy-from-env: 1.1.0
+    transitivePeerDependencies:
+      - debug
+
+  axios@0.30.3(debug@4.4.3):
+    dependencies:
+      follow-redirects: 1.16.0(debug@4.4.3)
       form-data: 4.0.5
       proxy-from-env: 1.1.0
     transitivePeerDependencies:
@@ -3506,6 +3563,10 @@ snapshots:
     optional: true
 
   cafe-utility@23.12.0: {}
+
+  cafe-utility@33.3.2: {}
+
+  cafe-utility@33.9.0: {}
 
   call-bind-apply-helpers@1.0.2:
     dependencies:
@@ -3798,7 +3859,9 @@ snapshots:
 
   flatted@3.4.2: {}
 
-  follow-redirects@1.16.0: {}
+  follow-redirects@1.16.0(debug@4.4.3):
+    optionalDependencies:
+      debug: 4.4.3
 
   form-data@4.0.5:
     dependencies:
@@ -4647,5 +4710,7 @@ snapshots:
   yocto-queue@0.1.0: {}
 
   zimmerframe@1.1.4: {}
+
+  zod@4.1.13: {}
 
   zod@4.3.6: {}

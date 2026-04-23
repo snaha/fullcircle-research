@@ -10,7 +10,8 @@ import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
-import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
+import { DATA_DIR, header, parseFeedSignerFlag, resolveTargets, type Target } from './cli-shared.js'
+import { loadSigner, tryPublishFeedUpdate } from './feed-publisher.js'
 import {
   addBalanceEventsToManifest,
   addBlocksToManifest,
@@ -187,10 +188,13 @@ if (args.ws) {
   await timed('open ws /chunks/stream', () => chunkStream!.open())
 }
 
-async function saveManifestNow(label: string, writeTreeSnapshot: boolean) {
+async function saveManifestNow(writeTreeSnapshot: boolean) {
   return saveManifest(bee, manifest, {
     batchId,
-    onProgress: (msg) => console.log(`       [${label}] ${msg}`),
+    // Silent save — intermediate checkpoints would otherwise flood the log
+    // with per-subtree dirty-node counts. The end-of-run save below keeps
+    // its verbose callback so the final summary is still visible.
+    onProgress: () => {},
     cacheManifest: args.cacheManifest,
     chunkStream,
     writeTreeSnapshot,
@@ -207,13 +211,16 @@ for (const t of uploadable) {
       ? {
           every: args.saveEvery,
           fn: async (processed: number, lastBlockNumber: string) => {
-            const checkpointStarted = Date.now()
-            console.log(`\n       ── checkpoint ${processed} blocks (last=${lastBlockNumber}) ──`)
             // Skip the snapshot rewrite here: it walks the whole tree and
-            // pays O(total-chunks) disk I/O per checkpoint. Recovery from the
-            // previous snapshot + the intermediate manifest ref is good
-            // enough; the final save at end-of-run refreshes the snapshot.
-            const refs = await saveManifestNow(`checkpoint ${processed}`, false)
+            // pays O(total-chunks) disk I/O per checkpoint. Recovery from
+            // the previous snapshot + the intermediate manifest ref is
+            // good enough; the final save at end-of-run refreshes the
+            // snapshot.
+            //
+            // Silent by design — the progress file below is the source of
+            // truth for resuming. `cat data/<fileBase>.upload-progress.json`
+            // when you need the intermediate manifest ref.
+            const refs = await saveManifestNow(false)
             const payload = {
               manifestReference: refs.root,
               subManifests: {
@@ -230,12 +237,6 @@ for (const t of uploadable) {
               updatedAt: new Date().toISOString(),
             }
             await writeFile(progressPath, JSON.stringify(payload, null, 2))
-            console.log(
-              `       ✓ checkpoint ${processed} saved in ${Date.now() - checkpointStarted} ms\n` +
-                `         manifest: ${refs.root}\n` +
-                `         resume:   pnpm era:upload --batch-id ${batchId} --manifest ${refs.root} ...\n` +
-                `         progress: ${progressPath}`,
-            )
           },
         }
       : undefined
@@ -356,3 +357,11 @@ console.log(`       tx:            ${refs.txManifest ?? '(empty)'}`)
 console.log(`       address:       ${refs.addressManifest ?? '(empty)'}`)
 console.log(`       balance-block: ${refs.balanceBlockManifest ?? '(empty)'}`)
 console.log(`       written:       ${manifestPath}`)
+
+await tryPublishFeedUpdate({
+  kind: 'manifest',
+  referenceHex: refs.root,
+  bee,
+  batchId,
+  signer: loadSigner(parseFeedSignerFlag(process.argv)),
+})

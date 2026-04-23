@@ -231,7 +231,7 @@ export async function addBlocksToPot(
       totalDifficulty: block.totalDifficulty === null ? null : BigInt(block.totalDifficulty),
     })
     const uploadResult = await bee.uploadData(options.batchId, bundleBytes)
-    const refBytes = hexToBytes(uploadResult.reference)
+    const refBytes = uploadResult.reference.toUint8Array()
 
     const numberKey = Number(block.number)
     if (!Number.isSafeInteger(numberKey)) {
@@ -293,7 +293,7 @@ export async function writePotBlockRangeMeta(
   }
   const metaBytes = textEncoder.encode(JSON.stringify(meta))
   const { reference } = await bee.uploadData(options.batchId, metaBytes)
-  indexes.metaRef = reference
+  indexes.metaRef = reference.toHex()
   log(
     `meta: firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock} blockCount=${meta.blockCount} txCount=${meta.txCount}`,
   )
@@ -322,7 +322,7 @@ const textDecoder = new TextDecoder()
 async function loadMetaStats(bee: Bee, metaRef: string | null): Promise<PotStats> {
   const empty: PotStats = { firstBlock: null, lastBlock: null, blockCount: 0n, txCount: 0n }
   if (!metaRef) return empty
-  const bytes = new Uint8Array(await bee.downloadData(metaRef))
+  const bytes = (await bee.downloadData(metaRef)).toUint8Array()
   const parsed = JSON.parse(textDecoder.decode(bytes)) as PotMeta
   return {
     firstBlock: BigInt(parsed.firstBlock),

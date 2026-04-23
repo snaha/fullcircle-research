@@ -21,7 +21,8 @@ import { writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
-import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
+import { DATA_DIR, header, parseFeedSignerFlag, resolveTargets, type Target } from './cli-shared.js'
+import { loadSigner, tryPublishFeedUpdate } from './feed-publisher.js'
 import { openSqliteIndexer } from './swarm-sqlite.js'
 
 // ---------- Parse arguments ----------
@@ -271,3 +272,12 @@ console.log(
 )
 console.log(`       db ref: ${dbRef}`)
 console.log(`       metadata:   ${metadataPath}`)
+
+await tryPublishFeedUpdate({
+  kind: 'sqlite',
+  referenceHex: dbRef,
+  bee,
+  batchId,
+  signer: loadSigner(parseFeedSignerFlag(process.argv)),
+  tagUid: syncResult.tagUid,
+})

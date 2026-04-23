@@ -53,6 +53,12 @@ export interface SyncResult {
   totalPages: number
   pagesUploaded: number
   pagesSkipped: number
+  /**
+   * The Bee tag uid used for every chunk uploaded in this sync. Reuse for
+   * related follow-up uploads (e.g. the epoch-feed SOC) so Bee sees them as
+   * the same sync batch — fresh tags can hang on peerless nodes.
+   */
+  tagUid: number
 }
 
 export interface AddBlocksResult {
@@ -347,7 +353,7 @@ export class SqliteIndexer {
         30_000,
         `block ${blockNumber}`,
       )
-      const swarmRef = hexToBytes(uploadResult.reference)
+      const swarmRef = uploadResult.reference.toUint8Array()
 
       // Add to SQLite index (committed immediately for crash recovery)
       const blockHash = hexToBytes(block.hash)
@@ -404,7 +410,7 @@ export class SqliteIndexer {
       30_000,
       `block ${blockNumber}`,
     )
-    const swarmRef = hexToBytes(uploadResult.reference)
+    const swarmRef = uploadResult.reference.toUint8Array()
 
     // Add to SQLite index
     const blockHash = hexToBytes(block.hash)
@@ -488,6 +494,7 @@ export class SqliteIndexer {
       totalPages,
       pagesUploaded: totalPages,
       pagesSkipped: 0,
+      tagUid,
     }
   }
 
