@@ -11,7 +11,8 @@ import { writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Bee } from '@ethersphere/bee-js'
-import { createFeedManifest, loadSigner, tryPublishFeedUpdate } from '@fullcircle/era/feed-publisher'
+import { loadSigner } from '@fullcircle/era/feed-publisher'
+import { FEED_TOPICS } from '@fullcircle/era/feed-topics'
 import { saveLatestRefs } from '@fullcircle/era/refs-state'
 
 const DATA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../data')
@@ -102,21 +103,30 @@ console.log(`  manifest: ${rootHex}`)
 console.log(`  access:   ${args.beeUrl}/bzz/${rootHex}/`)
 console.log(`  written:  ${outputPath}`)
 
+// Sequence-based feed update — same primitive `swarm-cli feed update` calls.
+// Bee's /bzz/{feedManifest}/ resolver does sequence lookup, so this is what
+// makes the stable URL actually resolve to the latest build. The era data
+// feeds (manifest/sqlite/pot) stay on epoch scheme because the explorer reads
+// them with createSyncEpochFinder; the `app` feed is read by Bee, not by JS.
 const signer = loadSigner(args.feedSignerKey)
-const feedResult = await tryPublishFeedUpdate({
-  kind: 'manifest',
-  referenceHex: rootHex,
-  bee,
-  batchId,
-  signer,
-})
-
+let publisher: string | undefined
 let feedManifestRef: string | undefined
+
 if (signer) {
-  const fm = await createFeedManifest(bee, batchId, 'manifest', signer)
-  feedManifestRef = fm.reference
+  const ownerHex = signer.publicKey().address().toHex()
+  publisher = ownerHex
+  const topic = FEED_TOPICS.app
+
+  const writer = bee.makeFeedWriter(topic, signer)
+  const update = await writer.uploadReference(batchId, rootHex)
+  console.log(`feed[app] updated · owner 0x${ownerHex} · ref=${update.reference.toHex()}`)
+
+  const fm = await bee.createFeedManifest(batchId, topic, ownerHex)
+  feedManifestRef = fm.toHex()
   console.log(`  feed manifest: ${feedManifestRef}`)
   console.log(`  feed access:   ${args.beeUrl}/bzz/${feedManifestRef}/`)
+} else {
+  console.log('feed[app] skipped · set FULLCIRCLE_FEED_SIGNER_KEY or --feed-signer-key to publish')
 }
 
-await saveLatestRefs({ manifest: rootHex, publisher: feedResult?.owner, feedManifest: feedManifestRef })
+await saveLatestRefs({ publisher, feedManifest: feedManifestRef })

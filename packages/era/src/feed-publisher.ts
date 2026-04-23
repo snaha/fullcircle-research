@@ -312,26 +312,6 @@ export interface PotFeedEnvelope {
 }
 
 /**
- * Create a Swarm feed manifest for the given feed kind and signer. The
- * returned reference is stable — it never changes for a given (topic, owner)
- * pair — so it can be used as a permanent entry point that always resolves to
- * the latest feed update when accessed via /bzz/{ref}/.
- *
- * Returns { reference: hex } matching the shape the caller expects.
- */
-export async function createFeedManifest(
-  bee: Bee,
-  batchId: string,
-  kind: FeedKind,
-  signer: PrivateKey,
-): Promise<{ reference: string }> {
-  const topic = FEED_TOPICS[kind]
-  const owner = signer.publicKey().address()
-  const ref = await bee.createFeedManifest(batchId, topic, owner)
-  return { reference: ref.toHex() }
-}
-
-/**
  * Upload a POT envelope JSON as raw bytes and return its Swarm reference
  * (hex, no 0x). The reference is what gets stored in the POT feed update.
  */
