@@ -1,6 +1,7 @@
 <script lang="ts">
   import '../app.css'
   import { goto } from '$app/navigation'
+  import { page } from '$app/state'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import * as Dialog from '$lib/components/ui/dialog'
@@ -38,6 +39,14 @@
   // When a valid publisher address is provided, the source's primary ref may
   // be left blank and resolved on save. Keep the UI hint consistent with that.
   let hasPublisher = $derived(isAddress(publisherInput.trim().toLowerCase().replace(/^0x/, '')))
+
+  const etherscanUrl = $derived.by(() => {
+    const segs = page.url.pathname.split('/').filter(Boolean)
+    if (segs.length >= 2 && (segs[0] === 'block' || segs[0] === 'tx' || segs[0] === 'address')) {
+      return `https://etherscan.io/${segs[0]}/${segs[1]}`
+    }
+    return 'https://etherscan.io'
+  })
 
   function needsPrimaryRef(): boolean {
     if (hasPublisher) return false
@@ -396,4 +405,32 @@
   </Dialog.Root>
 
   {@render children()}
+
+  <footer class="mt-10 border-t">
+    <div
+      class="mx-auto flex max-w-6xl flex-col items-center gap-2 px-5 py-6 text-sm text-muted-foreground"
+    >
+      <nav class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+        <a
+          href="https://github.com/snaha/fullcircle-research"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="hover:text-foreground">GitHub</a
+        >
+        <a
+          href="https://www.ethswarm.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="hover:text-foreground">Swarm</a
+        >
+        <a
+          href={etherscanUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="hover:text-foreground">Etherscan</a
+        >
+      </nav>
+      <p class="text-center text-xs">Don't trust, verify!</p>
+    </div>
+  </footer>
 </div>
