@@ -11,7 +11,9 @@
 // On upstream drops the proxy reconnects with exponential backoff and
 // replays still-pending chunks in queue order — Bee is content-addressed
 // so duplicate sends are idempotent. The client sees a single continuous
-// stream.
+// stream. If upstream closes with an empty queue the session is closed
+// instead of reconnected. Sessions idle in both directions for
+// IDLE_TIMEOUT_MS are closed so stale WS connections don't pile up.
 
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -27,6 +29,7 @@ const EMPTY = Buffer.alloc(0)
 
 const MAX_WS_ATTEMPTS = 5
 const BASE_WS_DELAY_MS = 200
+const IDLE_TIMEOUT_MS = 60_000
 
 // Headers that the ws library manages or that are hop-by-hop: don't
 // forward to upstream (it would confuse the upgrade handshake).
@@ -85,6 +88,7 @@ async function runWsSession(
   let frameCount = 0
   let hitCount = 0
   let missCount = 0
+  let idleTimer: NodeJS.Timeout | null = null
   const startedMs = Date.now()
 
   const upstreamHeaders: Record<string, string> = {}
@@ -97,7 +101,20 @@ async function runWsSession(
   const label = `WS ${req.url ?? WS_PATH_PREFIX}`
   const batchLabel = batchId ? ` (batch=${batchId.slice(0, 8)})` : ''
 
+  function bumpIdle(): void {
+    if (idleTimer) clearTimeout(idleTimer)
+    if (clientClosed) return
+    idleTimer = setTimeout(() => {
+      if (clientClosed) return
+      process.stderr.write(`${label} idle ${IDLE_TIMEOUT_MS}ms, closing${batchLabel}\n`)
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.close(1000, 'idle timeout')
+      }
+    }, IDLE_TIMEOUT_MS)
+  }
+
   function onUpstreamMessage(data: RawData, isBinary: boolean): void {
+    bumpIdle()
     if (!isBinary) {
       if (clientWs.readyState === WebSocket.OPEN) {
         clientWs.send(data as Buffer)
@@ -115,10 +132,22 @@ async function runWsSession(
   function onUpstreamClose(code: number): void {
     if (clientClosed) return
     upstreamWs = null
+    drain()
+    if (queue.length === 0) {
+      process.stderr.write(
+        `${label} -> upstream closed (code=${code}), queue empty, closing client\n`,
+      )
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.close(1000, 'upstream closed')
+      }
+      return
+    }
     for (const entry of queue) {
       if (entry.state === 'miss-sent') entry.state = 'miss-pending'
     }
-    process.stderr.write(`${label} -> upstream closed (code=${code}), reconnecting\n`)
+    process.stderr.write(
+      `${label} -> upstream closed (code=${code}), reconnecting (${queue.length} pending)\n`,
+    )
     void connect()
   }
 
@@ -196,6 +225,7 @@ async function runWsSession(
   }
 
   function onClientMessage(data: RawData, isBinary: boolean): void {
+    bumpIdle()
     if (!isBinary) {
       if (upstreamWs?.readyState === WebSocket.OPEN) {
         upstreamWs.send(data as Buffer)
@@ -235,6 +265,10 @@ async function runWsSession(
   })
   clientWs.on('close', () => {
     clientClosed = true
+    if (idleTimer) {
+      clearTimeout(idleTimer)
+      idleTimer = null
+    }
     const durationS = ((Date.now() - startedMs) / 1000).toFixed(1)
     process.stderr.write(
       `${label} closed${batchLabel} frames=${frameCount} hit=${hitCount} miss=${missCount} duration=${durationS}s\n`,
@@ -248,6 +282,7 @@ async function runWsSession(
     if (upstreamWs) upstreamWs.close()
   })
 
+  bumpIdle()
   const ok = await connect()
   if (ok) {
     process.stderr.write(`${label} -> upstream connected${batchLabel}\n`)
