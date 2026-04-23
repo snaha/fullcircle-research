@@ -1,0 +1,34 @@
+{
+  "name": "@fullcircle/proxy",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/proxy.ts",
+  "types": "./src/proxy.ts",
+  "exports": {
+    ".": "./src/proxy.ts"
+  },
+  "scripts": {
+    "start": "tsx src/bin.ts",
+    "dev": "tsx watch src/bin.ts",
+    "check": "tsc --noEmit",
+    "typecheck": "pnpm check",
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "prettier --check . && eslint .",
+    "format": "prettier --write . && eslint . --fix",
+    "knip": "knip",
+    "check:all": "pnpm lint && pnpm check && pnpm knip"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.6.0",
+    "eslint": "^10.2.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.5.0",
+    "knip": "^6.5.0",
+    "prettier": "^3.8.3",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.0"
+  }
+}

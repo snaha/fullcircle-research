@@ -19,8 +19,12 @@ packages/
     src/process.ts               CLI entry: parse cached erae file(s) → JSON artefacts
     src/download-and-process.ts  CLI entry: both in one pass
     src/cli-shared.ts            shared helpers (targets, writers, range parsing)
+  proxy/                         @fullcircle/proxy — HTTP proxy in front of any Bee
+    src/bin.ts                   CLI entry (--listen / --upstream / --cache-db)
+    src/proxy.ts                 streaming forward + upload-dedup handler
+    src/cache.ts                 node:sqlite upload-response cache
 docs/              research (RESEARCH, PROPOSAL, INCENTIVIZATION)
-data/              gitignored artefact cache (downloads + processed output)
+data/              gitignored artefact cache (downloads + processed output + proxy-cache.db)
 ```
 
 ## What's here
@@ -256,6 +260,40 @@ Endpoints: queen API at `http://localhost:1633`, local blockchain RPC at
 `http://localhost:9545`. Workers (when enabled) expose APIs on
 `http://localhost:{1,2,3,4}1633`.
 
+## Upload proxy
+
+[`@fullcircle/proxy`](./packages/proxy/) is a TypeScript forward proxy that
+sits between any uploader (era CLIs, bee-js apps, `curl`) and a Bee node —
+local queen, self-hosted, whatever. Two things it does, both useful in
+production and not just during development:
+
+- **Upload dedup.** Responses to `POST /bytes | /chunks | /bzz` are cached in a
+  local SQLite database keyed by `(sha256(body), batch_id, path)`. Bee is
+  content-addressed, so re-uploading the same bytes under the same batch is
+  wasted work — the cached reference is identical to what the node would
+  return. This matters whenever chunks repeat: POT `save()` re-uploading
+  unchanged nodes, resumed / retried era uploads, incremental runs. Only 2xx
+  responses are stored; non-success passes through unchanged.
+- **Observability.** Every request is logged to stderr with method, path,
+  status, latency, byte counts, postage batch id, and a running per-batch
+  tally:
+  `POST /bytes -> 201 (1ms req=1105B resp=82B) stamp=b3075c73 #688 up=1105B total_up=465625B cache=hit`
+
+Point uploaders at `http://localhost:1733` instead of `:1633`:
+
+```bash
+pnpm proxy:start                                          # → local queen on :1633
+pnpm proxy:start -- --upstream 65.109.80.9:3000           # → any reachable Bee
+pnpm proxy:dev                                            # tsx watch mode
+```
+
+Flags: `--listen HOST:PORT` (default `127.0.0.1:1733`), `--upstream HOST:PORT`
+(default `127.0.0.1:1633`), `--cache-db PATH` (default
+`data/proxy-cache.db`; set to `off` to disable caching). The cache honours
+`FULLCIRCLE_DATA_DIR`; delete the `.db` file to reset.
+
+Plain HTTP upstream only — for HTTPS gateways, front your own local Bee.
+
 ## Scripts
 
 - `pnpm run typecheck` — `tsc -b`
@@ -264,6 +302,7 @@ Endpoints: queen API at `http://localhost:1633`, local blockchain RPC at
 - `pnpm era:process [range|url]` — parse cached files only
 - `pnpm era:download-and-process [range|url]` — both
 - `pnpm bee:start` / `bee:start:workers` / `bee:stop` / `bee:logs` / `bee:fresh` / `bee:stamp` — local Bee stack
+- `pnpm proxy:start` / `proxy:dev` — upload proxy in front of any Bee (SQLite-cached chunk dedup + request log)
 - `pnpm lint` / `pnpm format` / `pnpm knip` / `pnpm check:all` — run tooling
   across every package that defines the matching script
 
