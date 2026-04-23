@@ -123,28 +123,14 @@ export async function publishFeedUpdate(
   const identifier = epochIdentifier(topic, epoch)
   const payload = epochPayload(at, referenceBytes)
 
-  // Upload the SOC via POST /soc/{owner}/{identifier}?sig=... — the only
-  // endpoint that stores single-owner chunks at their SOC address
-  // (keccak256(id||owner)). /chunks with SOC bytes stores them as CAC at
-  // the BMT hash instead (verified empirically).
+  // POST the SOC to /soc/{owner}/{id}?sig=… — the only endpoint that stores
+  // single-owner chunks at their SOC address (keccak256(id||owner)).
   //
-  // We go straight to fetch() rather than through bee.makeSOCWriter because
-  // the SOC path in bee-js has been observed to hang on peerless Bee nodes
-  // — the same symptom we saw historically with chunk uploads that missed
-  // the `swarm-tag` header. Setting every header explicitly here
-  // (content-type, swarm-postage-batch-id, swarm-tag, swarm-deferred-upload)
-  // guarantees the request that actually goes on the wire has what Bee
-  // needs to hand the response back without stalling on push-sync.
-  //
-  // We use server-side stamping (`swarm-postage-batch-id`) because the
-  // batch is owned by the Bee node's key, not by the feed signer.
-  // Client-side stamping via `swarm-postage-stamp` requires the envelope
-  // issuer to own the batch on-chain; Bee rejects it with 400 otherwise.
-  // Create a FRESH tag for this SOC — reusing the sqlite sync tag has been
-  // observed to cause /soc to hang on peerless Bee, suspected to be
-  // tag-state related (sync tag has 830 split chunks, maybe Bee trips on
-  // that). A tag created immediately before the SOC upload matches the
-  // pattern in swarm-sqlite.ts for /chunks uploads.
+  // `Connection: close` + explicit `Content-Length` are required: without
+  // them Node's fetch (and bee-js's axios) hang against /soc on a peerless
+  // Bee. A fresh tag per SOC is also required; reusing the sqlite sync tag
+  // triggers the same hang. `swarm-postage-batch-id` is server-side
+  // stamping — the batch is owned by the Bee node, not the feed signer.
   const freshTag = await options.bee.createTag()
   const tagUid = freshTag.uid
   const identifierObj = new Identifier(identifier)
@@ -164,31 +150,7 @@ export async function publishFeedUpdate(
     'swarm-tag': String(tagUid),
     connection: 'close',
   }
-  // Dump body to disk so the user can reproduce the request with curl if it
-  // hangs. The curl command below mirrors the fetch() call exactly.
-  const dumpPath = resolve(DATA_DIR, `.last-feed-${options.kind}-body.bin`)
-  await writeFile(dumpPath, cac.data)
-  log(
-    `feed[${options.kind}] POST ${url}` +
-      ` · tag=${tagUid} batch=${options.batchId.slice(0, 12)}… body=${cac.data.length}B`,
-  )
-  log(
-    `feed[${options.kind}] reproduce with: curl -v -X POST ` +
-      Object.entries(headers)
-        .map(([k, v]) => `-H '${k}: ${v}'`)
-        .join(' ') +
-      ` --data-binary @${dumpPath} '${url}'`,
-  )
-  // `Connection: close` plus an explicit `Content-Length` mirror curl's
-  // wire behaviour. Without them, fetch was observed to hang against /soc —
-  // almost certainly a pooled-connection / transfer-encoding quirk specific
-  // to this request path.
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body,
-  })
-  log(`feed[${options.kind}]`, res)
+  const res = await fetch(url, { method: 'POST', headers, body })
   const responseText = await res.text()
   if (!res.ok) {
     throw new Error(`SOC upload failed: ${res.status} ${res.statusText} — ${responseText}`)
