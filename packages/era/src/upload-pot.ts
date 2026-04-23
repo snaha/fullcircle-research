@@ -14,7 +14,8 @@ import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
-import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
+import { DATA_DIR, header, parseFeedSignerFlag, resolveTargets, type Target } from './cli-shared.js'
+import { loadSigner, tryPublishFeedUpdate, uploadPotEnvelope } from './feed-publisher.js'
 import {
   addBlocksToPot,
   getPotBlockRange,
@@ -218,3 +219,29 @@ console.log(
   `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${formatDuration(elapsed)}`,
 )
 console.log(`       written:  ${metaPath}`)
+
+const signer = loadSigner(parseFeedSignerFlag(process.argv))
+if (signer) {
+  const envelopeRef = await uploadPotEnvelope(bee, batchId, {
+    byNumber: indexRefs.byNumber,
+    byHash: indexRefs.byHash,
+    byTx: indexRefs.byTx,
+    meta: indexRefs.meta,
+  })
+  console.log(`       envelope: ${envelopeRef}`)
+  await tryPublishFeedUpdate({
+    kind: 'pot',
+    referenceHex: envelopeRef,
+    bee,
+    batchId,
+    signer,
+  })
+} else {
+  await tryPublishFeedUpdate({
+    kind: 'pot',
+    referenceHex: indexRefs.byNumber,
+    bee,
+    batchId,
+    signer: null,
+  })
+}

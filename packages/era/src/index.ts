@@ -40,6 +40,8 @@ export {
   type OpenPotIndexesOptions,
 } from './swarm-pot.js'
 
+export { FEED_TOPIC_STRINGS, FEED_TOPICS, type FeedKind } from './feed-topics.js'
+
 export {
   encodeBlockBundle,
   decodeBlockBundle,

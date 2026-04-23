@@ -10,7 +10,8 @@ import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
-import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
+import { DATA_DIR, header, parseFeedSignerFlag, resolveTargets, type Target } from './cli-shared.js'
+import { loadSigner, tryPublishFeedUpdate } from './feed-publisher.js'
 import {
   addBalanceEventsToManifest,
   addBlocksToManifest,
@@ -356,3 +357,11 @@ console.log(`       tx:            ${refs.txManifest ?? '(empty)'}`)
 console.log(`       address:       ${refs.addressManifest ?? '(empty)'}`)
 console.log(`       balance-block: ${refs.balanceBlockManifest ?? '(empty)'}`)
 console.log(`       written:       ${manifestPath}`)
+
+await tryPublishFeedUpdate({
+  kind: 'manifest',
+  referenceHex: refs.root,
+  bee,
+  batchId,
+  signer: loadSigner(parseFeedSignerFlag(process.argv)),
+})

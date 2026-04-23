@@ -6,7 +6,16 @@
   import * as Dialog from '$lib/components/ui/dialog'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import { hasSource, saveSettings, settings, sourceLabel, type Source } from '$lib/settings.svelte'
+  import {
+    hasSource,
+    isAddress,
+    isHex64,
+    resolveActiveSourceFromFeed,
+    saveSettings,
+    settings,
+    sourceLabel,
+    type Source,
+  } from '$lib/settings.svelte'
   import SearchIcon from '@lucide/svelte/icons/search'
   import SettingsIcon from '@lucide/svelte/icons/settings-2'
 
@@ -14,6 +23,7 @@
 
   let beeInput = $state(settings.beeUrl)
   let sourceInput = $state<Source>(settings.source)
+  let publisherInput = $state(settings.publisherAddress)
   let manifestInput = $state(settings.manifestRef)
   let potByNumberInput = $state(settings.potByNumber)
   let potByHashInput = $state(settings.potByHash)
@@ -22,12 +32,31 @@
   let sqliteDbRefInput = $state(settings.sqliteDbRef)
   let sqliteMetaInput = $state(settings.sqliteMeta)
   let settingsOpen = $state(!hasSource())
+  let resolving = $state(false)
+  let resolveError = $state('')
 
-  function submitSettings(e: SubmitEvent) {
+  // When a valid publisher address is provided, the source's primary ref may
+  // be left blank and resolved on save. Keep the UI hint consistent with that.
+  let hasPublisher = $derived(isAddress(publisherInput.trim().toLowerCase().replace(/^0x/, '')))
+
+  function needsPrimaryRef(): boolean {
+    if (hasPublisher) return false
+    if (sourceInput === 'manifest') return !isHex64(normHex(manifestInput))
+    if (sourceInput === 'sqlite') return !isHex64(normHex(sqliteDbRefInput))
+    return !isHex64(normHex(potByNumberInput)) || !isHex64(normHex(potByHashInput))
+  }
+
+  function normHex(s: string): string {
+    return s.trim().toLowerCase().replace(/^0x/, '')
+  }
+
+  async function submitSettings(e: SubmitEvent) {
     e.preventDefault()
+    resolveError = ''
     saveSettings({
       beeUrl: beeInput,
       source: sourceInput,
+      publisherAddress: publisherInput,
       manifestRef: manifestInput,
       potByNumber: potByNumberInput,
       potByHash: potByHashInput,
@@ -36,6 +65,35 @@
       sqliteDbRef: sqliteDbRefInput,
       sqliteMeta: sqliteMetaInput,
     })
+
+    // Only resolve from the feed when the primary ref for the active source
+    // is blank — pasted refs take precedence so operators can pin snapshots.
+    const needsResolve =
+      isAddress(settings.publisherAddress) &&
+      ((sourceInput === 'manifest' && !isHex64(settings.manifestRef)) ||
+        (sourceInput === 'sqlite' && !isHex64(settings.sqliteDbRef)) ||
+        (sourceInput === 'pot' && (!isHex64(settings.potByNumber) || !isHex64(settings.potByHash))))
+
+    if (needsResolve) {
+      resolving = true
+      try {
+        await resolveActiveSourceFromFeed()
+        // Sync inputs so a second save button press shows the resolved values.
+        manifestInput = settings.manifestRef
+        potByNumberInput = settings.potByNumber
+        potByHashInput = settings.potByHash
+        potByTxInput = settings.potByTx
+        potMetaInput = settings.potMeta
+        sqliteDbRefInput = settings.sqliteDbRef
+        sqliteMetaInput = settings.sqliteMeta
+      } catch (err) {
+        resolveError = (err as Error).message
+        resolving = false
+        return
+      }
+      resolving = false
+    }
+
     settingsOpen = false
   }
 
@@ -136,6 +194,24 @@
         </div>
 
         <div class="flex flex-col gap-2">
+          <Label for="publisher-address"
+            >Publisher address <span class="text-muted-foreground">(optional)</span></Label
+          >
+          <Input
+            id="publisher-address"
+            type="text"
+            bind:value={publisherInput}
+            placeholder="40-character hex (0x…)"
+            spellcheck="false"
+            class="font-mono"
+          />
+          <p class="text-xs text-muted-foreground">
+            When set and the refs below are blank, the explorer resolves the latest upload via the
+            publisher's Swarm feed. Paste a ref below to pin a specific snapshot.
+          </p>
+        </div>
+
+        <div class="flex flex-col gap-2">
           <Label>Index type</Label>
           <div class="flex flex-wrap gap-4 text-sm">
             <label class="flex items-center gap-2">
@@ -173,7 +249,10 @@
 
         {#if sourceInput === 'manifest'}
           <div class="flex flex-col gap-2">
-            <Label for="manifest-ref">Manifest reference</Label>
+            <Label for="manifest-ref"
+              >Manifest reference{#if hasPublisher}
+                <span class="text-muted-foreground">(optional)</span>{/if}</Label
+            >
             <Input
               id="manifest-ref"
               type="text"
@@ -191,7 +270,10 @@
               (or read from <code class="font-mono">eras-*.sqlite-index.json</code>).
             </p>
             <div class="flex flex-col gap-2">
-              <Label for="sqlite-db-ref">dbRef</Label>
+              <Label for="sqlite-db-ref"
+                >dbRef{#if hasPublisher}
+                  <span class="text-muted-foreground">(optional)</span>{/if}</Label
+              >
               <Input
                 id="sqlite-db-ref"
                 type="text"
@@ -225,7 +307,10 @@
               read from <code class="font-mono">eras-*.pot.json</code>).
             </p>
             <div class="flex flex-col gap-2">
-              <Label for="pot-by-number">byNumber</Label>
+              <Label for="pot-by-number"
+                >byNumber{#if hasPublisher}
+                  <span class="text-muted-foreground">(optional)</span>{/if}</Label
+              >
               <Input
                 id="pot-by-number"
                 type="text"
@@ -236,7 +321,10 @@
               />
             </div>
             <div class="flex flex-col gap-2">
-              <Label for="pot-by-hash">byHash</Label>
+              <Label for="pot-by-hash"
+                >byHash{#if hasPublisher}
+                  <span class="text-muted-foreground">(optional)</span>{/if}</Label
+              >
               <Input
                 id="pot-by-hash"
                 type="text"
@@ -278,11 +366,30 @@
           </div>
         {/if}
 
+        {#if resolveError}
+          <p class="text-sm text-red-600">feed lookup failed: {resolveError}</p>
+        {/if}
+
         <Dialog.Footer>
-          <Button type="button" variant="ghost" onclick={() => (settingsOpen = false)}>
+          <Button
+            type="button"
+            variant="ghost"
+            onclick={() => (settingsOpen = false)}
+            disabled={resolving}
+          >
             Cancel
           </Button>
-          <Button type="submit">Save</Button>
+          <Button type="submit" disabled={resolving}>
+            {#if resolving}
+              Resolving…
+            {:else if needsPrimaryRef() === false && hasPublisher}
+              Save
+            {:else if hasPublisher}
+              Save &amp; resolve
+            {:else}
+              Save
+            {/if}
+          </Button>
         </Dialog.Footer>
       </form>
     </Dialog.Content>

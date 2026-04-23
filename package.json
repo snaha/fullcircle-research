@@ -13,6 +13,7 @@
     "era:upload-pot": "pnpm --filter @fullcircle/era run upload-pot",
     "era:state-extract": "pnpm --filter @fullcircle/era run state-extract",
     "era:upload-sqlite": "pnpm --filter @fullcircle/era run upload-sqlite",
+    "era:feed-diag": "pnpm --filter @fullcircle/era run feed-diag",
     "rpc:dev": "pnpm --filter @fullcircle/rpc run dev",
     "rpc:start": "pnpm --filter @fullcircle/rpc run start",
     "demo:dev": "pnpm --filter @fullcircle/demo run dev",

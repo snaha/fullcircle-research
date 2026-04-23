@@ -7,7 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./bundle": "./src/bundle.ts"
+    "./bundle": "./src/bundle.ts",
+    "./feed-topics": "./src/feed-topics.ts"
   },
   "scripts": {
     "download": "tsx src/download.ts",
@@ -17,6 +18,7 @@
     "upload-pot": "tsx src/upload-pot.ts",
     "state-extract": "tsx src/state-extract.ts",
     "upload-sqlite": "tsx src/upload-sqlite.ts",
+    "feed-diag": "tsx src/feed-diag.ts",
     "check": "tsc --noEmit",
     "typecheck": "pnpm check",
     "build": "tsc",
@@ -36,7 +38,7 @@
     "@ethereumjs/tx": "10.1.1",
     "@ethereumjs/util": "10.1.1",
     "@ethereumjs/vm": "10.1.1",
-    "@ethersphere/bee-js": "^8.0.0",
+    "@ethersphere/bee-js": "^11.1.1",
     "@noble/curves": "^1.9.1",
     "@noble/hashes": "^1.4.0",
     "better-sqlite3": "^11.9.1",

@@ -66,6 +66,21 @@ export function header(t: Target): string {
   return t.era !== null ? `\n== era ${t.era} ==` : `\n== ${t.fileBase} ==`
 }
 
+/**
+ * Scan argv for --feed-signer-key <hex> and return its value (or undefined).
+ * Upload CLIs call this in addition to their own parseArgs and forward the
+ * result to `loadSigner()` in feed-publisher.ts. The env var
+ * FULLCIRCLE_FEED_SIGNER_KEY is the primary source; the flag overrides it.
+ */
+export function parseFeedSignerFlag(argv: string[]): string | undefined {
+  for (let i = 2; i < argv.length; i++) {
+    if (argv[i] === '--feed-signer-key' && argv[i + 1]) {
+      return argv[i + 1]
+    }
+  }
+  return undefined
+}
+
 // ---------- download ----------
 
 /** Fetch the erae file if not already cached. Returns bytes either way. */
