@@ -17,7 +17,7 @@
 import { createReadStream } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { Bee } from '@ethersphere/bee-js'
 import { encodeBlockBundle } from './bundle.js'
 
@@ -133,22 +133,22 @@ export function bytesToHex(bytes: Uint8Array): string {
 // ---------- SqliteIndexer Class ----------
 
 export class SqliteIndexer {
-  private db: Database.Database
+  private db: DatabaseSync
   private dbPath: string
   private log: (msg: string) => void
 
   constructor(options: SqliteIndexerOptions) {
     this.dbPath = options.dbPath
     this.log = options.onProgress ?? console.log
-    this.db = new Database(this.dbPath)
+    this.db = new DatabaseSync(this.dbPath)
     this.initSchema()
   }
 
   private initSchema(): void {
     // Set page size to 4096 (must be done before creating tables)
-    this.db.pragma('page_size = 4096')
+    this.db.exec('PRAGMA page_size = 4096')
     // WAL mode for better write performance with frequent commits
-    this.db.pragma('journal_mode = WAL')
+    this.db.exec('PRAGMA journal_mode = WAL')
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS blocks (
@@ -166,6 +166,19 @@ export class SqliteIndexer {
 
       CREATE INDEX IF NOT EXISTS idx_tx_block ON transactions(block_number);
     `)
+  }
+
+  // node:sqlite has no transaction() wrapper like better-sqlite3; run the
+  // callback inside BEGIN/COMMIT and ROLLBACK on throw.
+  private transaction(fn: () => void): void {
+    this.db.exec('BEGIN')
+    try {
+      fn()
+      this.db.exec('COMMIT')
+    } catch (err) {
+      this.db.exec('ROLLBACK')
+      throw err
+    }
   }
 
   /**
@@ -263,12 +276,12 @@ export class SqliteIndexer {
       'INSERT OR REPLACE INTO transactions (tx_hash, block_number) VALUES (?, ?)',
     )
 
-    this.db.transaction(() => {
+    this.transaction(() => {
       insertBlock.run(blockNumber, blockHash, swarmRef)
       for (const txHash of txHashes) {
         insertTx.run(txHash, blockNumber)
       }
-    })()
+    })
   }
 
   /**
@@ -359,13 +372,13 @@ export class SqliteIndexer {
       const blockHash = hexToBytes(block.hash)
       const txHashes = block.txHashes.map(hexToBytes)
 
-      this.db.transaction(() => {
+      this.transaction(() => {
         insertBlock.run(blockNumber, blockHash, swarmRef)
         for (const txHash of txHashes) {
           insertTx.run(txHash, blockNumber)
         }
         txHashesAdded += txHashes.length
-      })()
+      })
 
       blocksAdded++
       if (blocksAdded % 100 === 0) {
@@ -423,12 +436,12 @@ export class SqliteIndexer {
       'INSERT OR REPLACE INTO transactions (tx_hash, block_number) VALUES (?, ?)',
     )
 
-    this.db.transaction(() => {
+    this.transaction(() => {
       insertBlock.run(blockNumber, blockHash, swarmRef)
       for (const txHash of txHashes) {
         insertTx.run(txHash, blockNumber)
       }
-    })()
+    })
 
     return { blockNumber, skipped: false, txHashesAdded: txHashes.length }
   }
@@ -447,7 +460,7 @@ export class SqliteIndexer {
     const log = options.onProgress ?? this.log
 
     // Force SQLite to flush any WAL to main file
-    this.db.pragma('wal_checkpoint(TRUNCATE)')
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
 
     // Read entire database file
     const dbBuffer = await readFile(this.dbPath)
@@ -510,10 +523,10 @@ export class SqliteIndexer {
     }
 
     // Get file size
-    const pageCountResult = this.db.pragma('page_count') as Array<{ page_count: number }>
-    const pageSizeResult = this.db.pragma('page_size') as Array<{ page_size: number }>
-    const pageCount = pageCountResult[0].page_count
-    const pageSize = pageSizeResult[0].page_size
+    const pageCountResult = this.db.prepare('PRAGMA page_count').get() as { page_count: number }
+    const pageSizeResult = this.db.prepare('PRAGMA page_size').get() as { page_size: number }
+    const pageCount = pageCountResult.page_count
+    const pageSize = pageSizeResult.page_size
 
     return {
       blockCount: blockCount.count,

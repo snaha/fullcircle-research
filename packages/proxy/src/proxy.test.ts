@@ -83,6 +83,24 @@ describe('HTTP proxy', () => {
       await proxyRequest(proxy, { method: 'POST', path: '/bytes', body })
       expect(upstream.requests).toHaveLength(2)
     })
+
+    it('POST /tags is forwarded uncached (bee-js createTag path)', async () => {
+      // bee-js's Bee.createTag() sends POST /tags with no body and no
+      // swarm-postage-batch-id header. /tags is not in CACHEABLE_PATH_PREFIXES,
+      // so it must fall through handleStream and hit upstream every time.
+      const { upstream, proxy } = await setup((_req, res) => {
+        res.writeHead(201, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ uid: 494344, address: '' }))
+      })
+      const first = await proxyRequest(proxy, { method: 'POST', path: '/tags' })
+      expect(first.status).toBe(201)
+      expect(JSON.parse(first.body.toString())).toEqual({ uid: 494344, address: '' })
+      const second = await proxyRequest(proxy, { method: 'POST', path: '/tags' })
+      expect(second.status).toBe(201)
+      expect(upstream.requests).toHaveLength(2)
+      expect(upstream.requests[0]!.method).toBe('POST')
+      expect(upstream.requests[0]!.url).toBe('/tags')
+    })
   })
 
   describe('cacheable routes: first miss, then hit', () => {
