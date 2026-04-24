@@ -8,11 +8,14 @@
 // Schema:
 //   blocks(number INTEGER PRIMARY KEY, hash BLOB, swarm_ref BLOB)
 //   transactions(tx_hash BLOB PRIMARY KEY, block_number INTEGER)
+//   accounts(address BLOB PRIMARY KEY, swarm_ref BLOB) -- ref of AccountRecord JSON
+//   balance_blocks(block_number INTEGER PRIMARY KEY, swarm_ref BLOB) -- ref of BlockEventsRecord JSON
+//   meta(key TEXT PRIMARY KEY, value TEXT) -- aggregate counts; see writeMeta()
 //
 // Lookup flow (client):
 //   1. Fetch SQLite database via root reference (dbRef)
 //   2. Use sql.js-httpvfs with Swarm Range requests to query SQLite
-//   3. Get swarm_ref for block, fetch block bundle directly
+//   3. Get swarm_ref for block/account, fetch payload directly via /bytes/{ref}
 
 import { createReadStream } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -74,6 +77,26 @@ export interface AddSingleBlockResult {
   blockNumber: number
   skipped: boolean
   txHashesAdded: number
+}
+
+export interface AddBalanceEventsResult {
+  addressCount: number
+  blockCount: number
+  eventCount: number
+}
+
+/**
+ * Aggregate counts persisted in the `meta` table of the DB. Matches the
+ * shape of `PotMeta` / `ManifestMeta` so the explorer can treat it
+ * source-agnostically.
+ */
+export interface SqliteMeta {
+  firstBlock: string
+  lastBlock: string
+  blockCount: string
+  txCount: string
+  addressCount: string
+  eventCount: string
 }
 
 // Chunk with span tracking for proper Merkle tree building
@@ -168,6 +191,21 @@ export class SqliteIndexer {
       );
 
       CREATE INDEX IF NOT EXISTS idx_tx_block ON transactions(block_number);
+
+      CREATE TABLE IF NOT EXISTS accounts (
+        address BLOB PRIMARY KEY,
+        swarm_ref BLOB NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS balance_blocks (
+        block_number INTEGER PRIMARY KEY,
+        swarm_ref BLOB NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `)
   }
 
@@ -450,6 +488,188 @@ export class SqliteIndexer {
   }
 
   /**
+   * Aggregate balance-mutation events from one or more NDJSON files and add
+   * them to the SQLite `accounts` and `balance_blocks` tables. Events are
+   * accumulated across every input file first so per-address history spans
+   * all eras in the run — mirrors `addBalanceEventsToPot` /
+   * `addBalanceEventsToManifest`.
+   *
+   * Per address, uploads one `AccountRecord` JSON chunk (final balance + the
+   * full block-ordered event log) and records its ref in `accounts`. Per
+   * block, uploads one `BlockEventsRecord` JSON chunk and records its ref in
+   * `balance_blocks`. Upload is two-phase (parallel uploads, then a single
+   * SQL transaction) to keep bee-js concurrency high while the SQLite writes
+   * stay cheap.
+   *
+   * Overwrite semantics: re-running with overlapping data replaces the
+   * previous row (the earlier JSON chunk is orphaned). Upload all eras in
+   * one run to keep per-address history coherent.
+   */
+  async addBalanceEventsFromNdjson(
+    bee: Bee,
+    eventsPaths: string[],
+    options: {
+      batchId: string
+      onProgress?: (msg: string) => void
+      concurrency?: number
+    },
+  ): Promise<AddBalanceEventsResult> {
+    const log = options.onProgress ?? this.log
+    const concurrency = options.concurrency ?? 32
+
+    const byAddr = new Map<string, { block: string; pre: string; post: string }[]>()
+    const byBlock = new Map<string, { addr: string; pre: string; post: string }[]>()
+    let eventCount = 0
+
+    for (const path of eventsPaths) {
+      log(`reading ${path}`)
+      let perFile = 0
+      for await (const ev of readBalanceEventsNdjson(path)) {
+        const addrEntry = byAddr.get(ev.addr)
+        if (addrEntry === undefined) {
+          byAddr.set(ev.addr, [{ block: ev.block, pre: ev.pre, post: ev.post }])
+        } else {
+          addrEntry.push({ block: ev.block, pre: ev.pre, post: ev.post })
+        }
+        const blockEntry = byBlock.get(ev.block)
+        if (blockEntry === undefined) {
+          byBlock.set(ev.block, [{ addr: ev.addr, pre: ev.pre, post: ev.post }])
+        } else {
+          blockEntry.push({ addr: ev.addr, pre: ev.pre, post: ev.post })
+        }
+        eventCount++
+        perFile++
+      }
+      log(`  ${perFile} events from ${path}`)
+    }
+
+    if (eventCount === 0) {
+      log('no balance events — skipping state upload')
+      return { addressCount: 0, blockCount: 0, eventCount: 0 }
+    }
+
+    log(
+      `aggregated ${eventCount} events across ${byAddr.size} addresses and ${byBlock.size} blocks`,
+    )
+
+    const accountEntries = [...byAddr.entries()]
+    log(`uploading ${accountEntries.length} account records...`)
+    const accountRefs: { key: Uint8Array; ref: Uint8Array }[] = new Array(accountEntries.length)
+    await runWithConcurrency(
+      accountEntries,
+      concurrency,
+      async ([addr, events], i) => {
+        events.sort((a, b) => {
+          const da = BigInt(a.block) - BigInt(b.block)
+          return da < 0n ? -1 : da > 0n ? 1 : 0
+        })
+        const record: AccountRecord = {
+          addr,
+          balance: events[events.length - 1].post,
+          eventCount: events.length,
+          events,
+        }
+        const bytes = textEncoder.encode(JSON.stringify(record))
+        const { reference } = await bee.uploadData(options.batchId, bytes)
+        const normalizedAddr = addr.toLowerCase().replace(/^0x/, '')
+        if (!/^[0-9a-f]{40}$/.test(normalizedAddr)) {
+          throw new Error(`invalid address in balance events: ${addr}`)
+        }
+        accountRefs[i] = { key: hexToBytes(normalizedAddr), ref: reference.toUint8Array() }
+      },
+      (done, total) => log(`  accounts ${done}/${total}`),
+    )
+
+    const blockEntries = [...byBlock.entries()]
+    log(`uploading ${blockEntries.length} per-block event records...`)
+    const blockRefs: { key: number; ref: Uint8Array }[] = new Array(blockEntries.length)
+    await runWithConcurrency(
+      blockEntries,
+      concurrency,
+      async ([blockStr, events], i) => {
+        events.sort((a, b) => (a.addr < b.addr ? -1 : a.addr > b.addr ? 1 : 0))
+        const record: BlockEventsRecord = { block: blockStr, events }
+        const bytes = textEncoder.encode(JSON.stringify(record))
+        const { reference } = await bee.uploadData(options.batchId, bytes)
+        const numberKey = Number(blockStr)
+        if (!Number.isSafeInteger(numberKey)) {
+          throw new Error(`block number ${blockStr} exceeds Number.MAX_SAFE_INTEGER`)
+        }
+        blockRefs[i] = { key: numberKey, ref: reference.toUint8Array() }
+      },
+      (done, total) => log(`  blocks ${done}/${total}`),
+    )
+
+    const insertAccount = this.db.prepare(
+      'INSERT OR REPLACE INTO accounts (address, swarm_ref) VALUES (?, ?)',
+    )
+    const insertBalanceBlock = this.db.prepare(
+      'INSERT OR REPLACE INTO balance_blocks (block_number, swarm_ref) VALUES (?, ?)',
+    )
+    this.runInTransaction(() => {
+      for (const { key, ref } of accountRefs) {
+        insertAccount.run(key, ref)
+      }
+      for (const { key, ref } of blockRefs) {
+        insertBalanceBlock.run(key, ref)
+      }
+    })
+
+    return { addressCount: byAddr.size, blockCount: byBlock.size, eventCount }
+  }
+
+  /**
+   * Compute aggregate counts from the DB and persist them in the `meta`
+   * table. The DB is self-describing — no separate Swarm meta chunk is
+   * needed, so a single `dbRef` carries everything the explorer reads.
+   *
+   * `eventCountDelta` is the number of balance events added in the current
+   * run. It's accumulated on top of whatever is already in the meta row,
+   * mirroring `addBalanceEventsToPot`'s counter behaviour — individual
+   * events live in JSON chunks on Swarm, so their total can't be recovered
+   * from SQL alone. Everything else (first/last block, block / tx / account
+   * counts) is authoritative from the DB tables themselves.
+   *
+   * Safe to call multiple times: later calls overwrite earlier ones with
+   * the latest DB state plus the supplied delta. For extension uploads
+   * (era 7 on top of 0..6), pass only the new run's event count.
+   */
+  writeMeta(eventCountDelta: number): SqliteMeta {
+    const blockRange = this.db
+      .prepare('SELECT MIN(number) as first, MAX(number) as last, COUNT(*) as count FROM blocks')
+      .get() as { first: number | null; last: number | null; count: number }
+    const txCount = this.db.prepare('SELECT COUNT(*) as count FROM transactions').get() as {
+      count: number
+    }
+    const accountCount = this.db.prepare('SELECT COUNT(*) as count FROM accounts').get() as {
+      count: number
+    }
+
+    const prior = this.db.prepare('SELECT value FROM meta WHERE key = ?').get('eventCount') as
+      | { value: string }
+      | undefined
+    const totalEventCount = (prior ? Number(prior.value) : 0) + eventCountDelta
+
+    const meta: SqliteMeta = {
+      firstBlock: blockRange.first !== null ? String(blockRange.first) : '0',
+      lastBlock: blockRange.last !== null ? String(blockRange.last) : '0',
+      blockCount: String(blockRange.count),
+      txCount: String(txCount.count),
+      addressCount: String(accountCount.count),
+      eventCount: String(totalEventCount),
+    }
+
+    const insert = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
+    this.runInTransaction(() => {
+      for (const [key, value] of Object.entries(meta)) {
+        insert.run(key, value)
+      }
+    })
+
+    return meta
+  }
+
+  /**
    * Sync SQLite database to Swarm with proper Merkle tree structure.
    *
    * Builds a content-addressed Merkle tree where:
@@ -526,11 +746,25 @@ export class SqliteIndexer {
   /**
    * Get statistics about the current index.
    */
-  getStats(): { blockCount: number; txCount: number; dbSizeBytes: number } {
+  getStats(): {
+    blockCount: number
+    txCount: number
+    accountCount: number
+    balanceBlockCount: number
+    dbSizeBytes: number
+  } {
     const blockCount = this.db.prepare('SELECT COUNT(*) as count FROM blocks').get() as {
       count: number
     }
     const txCount = this.db.prepare('SELECT COUNT(*) as count FROM transactions').get() as {
+      count: number
+    }
+    const accountCount = this.db.prepare('SELECT COUNT(*) as count FROM accounts').get() as {
+      count: number
+    }
+    const balanceBlockCount = this.db
+      .prepare('SELECT COUNT(*) as count FROM balance_blocks')
+      .get() as {
       count: number
     }
 
@@ -545,6 +779,8 @@ export class SqliteIndexer {
     return {
       blockCount: blockCount.count,
       txCount: txCount.count,
+      accountCount: accountCount.count,
+      balanceBlockCount: balanceBlockCount.count,
       dbSizeBytes: pageCount * pageSize,
     }
   }
@@ -595,4 +831,61 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, msg: string): Pro
  */
 export function openSqliteIndexer(options: SqliteIndexerOptions): SqliteIndexer {
   return new SqliteIndexer(options)
+}
+
+// ---------- Balance-events types + readers ----------
+
+const textEncoder = new TextEncoder()
+
+interface BalanceEvent {
+  block: string
+  addr: string
+  pre: string
+  post: string
+}
+
+interface AccountRecord {
+  addr: string
+  balance: string
+  eventCount: number
+  events: { block: string; pre: string; post: string }[]
+}
+
+interface BlockEventsRecord {
+  block: string
+  events: { addr: string; pre: string; post: string }[]
+}
+
+async function* readBalanceEventsNdjson(path: string): AsyncGenerator<BalanceEvent> {
+  const rl = createInterface({
+    input: createReadStream(path, 'utf8'),
+    crlfDelay: Infinity,
+  })
+  for await (const line of rl) {
+    if (line.trim()) yield JSON.parse(line) as BalanceEvent
+  }
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  let nextIndex = 0
+  let done = 0
+  const total = items.length
+
+  const runOne = async (): Promise<void> => {
+    while (true) {
+      const i = nextIndex++
+      if (i >= total) return
+      await worker(items[i], i)
+      done++
+      if (onProgress && done % 500 === 0) onProgress(done, total)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, total) }, runOne))
+  if (onProgress) onProgress(done, total)
 }

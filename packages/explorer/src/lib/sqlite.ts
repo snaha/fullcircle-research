@@ -7,6 +7,9 @@
 // Schema (matches packages/era/src/swarm-sqlite.ts):
 //   blocks(number INTEGER PRIMARY KEY, hash BLOB, swarm_ref BLOB)
 //   transactions(tx_hash BLOB PRIMARY KEY, block_number INTEGER)
+//   accounts(address BLOB PRIMARY KEY, swarm_ref BLOB)
+//   balance_blocks(block_number INTEGER PRIMARY KEY, swarm_ref BLOB)
+//   meta(key TEXT PRIMARY KEY, value TEXT) -- aggregate counts, see getMeta()
 
 import { browser } from '$app/environment'
 import { createDbWorker, type WorkerHttpvfs } from 'sql.js-httpvfs'
@@ -152,6 +155,64 @@ export async function getRefByTxHash(
   }
 
   return blockResult[0].ref.toLowerCase()
+}
+
+/**
+ * Get swarm_ref of the AccountRecord JSON chunk for a given address.
+ */
+export async function getAccountRef(
+  address: string,
+  options: SqliteLookupOptions,
+): Promise<string | null> {
+  const worker = await getWorker(options)
+  const normalized = address.toLowerCase().startsWith('0x') ? address.slice(2) : address
+  if (!/^[0-9a-f]{40}$/.test(normalized.toLowerCase())) {
+    throw new Error(`invalid address: ${address}`)
+  }
+
+  const addrBytes = hexToBytes(normalized)
+  const result = (await worker.db.query(
+    'SELECT hex(swarm_ref) as ref FROM accounts WHERE address = ?',
+    [addrBytes],
+  )) as Array<{ ref: string }>
+  return result.length > 0 ? result[0].ref.toLowerCase() : null
+}
+
+export interface SqliteMeta {
+  firstBlock: string
+  lastBlock: string
+  blockCount: string
+  txCount: string
+  addressCount: string
+  eventCount: string
+}
+
+/**
+ * Read the DB-resident aggregate counts written by `era:upload-sqlite`.
+ * Returns null when the DB predates the `meta` table (older upload) or
+ * has no rows. Callers should fall back to zero counts in that case.
+ */
+export async function getMeta(options: SqliteLookupOptions): Promise<SqliteMeta | null> {
+  const worker = await getWorker(options)
+  let rows: Array<{ key: string; value: string }>
+  try {
+    rows = (await worker.db.query('SELECT key, value FROM meta')) as Array<{
+      key: string
+      value: string
+    }>
+  } catch {
+    return null
+  }
+  if (rows.length === 0) return null
+  const map = new Map(rows.map((r) => [r.key, r.value]))
+  return {
+    firstBlock: map.get('firstBlock') ?? '0',
+    lastBlock: map.get('lastBlock') ?? '0',
+    blockCount: map.get('blockCount') ?? '0',
+    txCount: map.get('txCount') ?? '0',
+    addressCount: map.get('addressCount') ?? '0',
+    eventCount: map.get('eventCount') ?? '0',
+  }
 }
 
 // ---------- Probe Functions (for existence checks) ----------

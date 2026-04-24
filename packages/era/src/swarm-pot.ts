@@ -31,13 +31,10 @@
 // we track counters during `addBlocksToPot` and rely on the caller to load
 // previous stats when extending.
 
-import { createRequire } from 'node:module'
-import { webcrypto } from 'node:crypto'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { Bee } from '@ethersphere/bee-js'
+import { installPotCompat } from '@fullcircle/pot'
 import { encodeBlockBundle } from './bundle.js'
 
 // `PotKvs` comes from ./pot.d.ts, which declares the global `pot` plus a
@@ -47,28 +44,11 @@ type PotKvs = ReturnType<typeof globalThis.pot.new> extends Promise<infer T> ? T
 
 // ---------- One-time POT runtime load ----------
 
-// pot-node.js is CommonJS and attaches `pot` to globalThis on require. The
-// auto-init fires if `pot.wasm` is next to pot-node.js — which is the case in
-// vendor/pot/.
 let readyPromise: Promise<void> | null = null
 
 function loadPotRuntime(): Promise<void> {
   if (readyPromise) return readyPromise
-  // Node 18 doesn't expose globalThis.crypto without --experimental-global-webcrypto;
-  // pot-node.js throws at top level if it's missing. Safe to set on Node 19+ too.
-  if (!(globalThis as { crypto?: unknown }).crypto) {
-    ;(globalThis as { crypto?: unknown }).crypto = webcrypto
-  }
-  // pot-node.js reads `global.potVerbosity` at init and defaults to a chatty
-  // level that prints slot/loader lines for every KVS operation. Mute it
-  // before require so the CLI output stays useful; override with
-  // FULLCIRCLE_POT_VERBOSITY when debugging the runtime.
-  const verbosity = process.env.FULLCIRCLE_POT_VERBOSITY
-  ;(globalThis as { potVerbosity?: number }).potVerbosity = verbosity ? Number(verbosity) : 0
-  const here = dirname(fileURLToPath(import.meta.url))
-  const potNodePath = resolve(here, '../vendor/pot/pot-node.js')
-  const req = createRequire(import.meta.url)
-  req(potNodePath)
+  installPotCompat()
   readyPromise = globalThis.pot.ready().then(() => undefined)
   return readyPromise
 }
@@ -397,6 +377,7 @@ export async function addBalanceEventsToPot(
   // the KVS sequentially in the same order. POT KVS mutations have to stay
   // serialized per-store, but bee.uploadData can happily run in parallel.
   const accountRefs: { key: Uint8Array; ref: Uint8Array }[] = new Array(accountEntries.length)
+  const accountUploadRate = makeRateLogger(log, '  accounts upload', accountEntries.length)
   await runWithConcurrency(
     accountEntries,
     concurrency,
@@ -419,17 +400,19 @@ export async function addBalanceEventsToPot(
       }
       accountRefs[i] = { key: hexToBytes(normalizedAddr), ref: reference.toUint8Array() }
     },
-    (done, total) => log(`  accounts upload ${done}/${total}`),
+    (done) => accountUploadRate(done),
   )
+  const accountIndexRate = makeRateLogger(log, '  accounts indexed', accountRefs.length)
   for (let i = 0; i < accountRefs.length; i++) {
     const { key, ref } = accountRefs[i]
     await indexes.byAddress.putRaw(key, ref)
+    accountIndexRate(i + 1)
   }
-  log(`  accounts indexed ${accountRefs.length}/${accountRefs.length}`)
 
   const blockEntries = [...byBlock.entries()]
   log(`uploading ${blockEntries.length} per-block event records...`)
   const blockRefs: { key: number; ref: Uint8Array }[] = new Array(blockEntries.length)
+  const blockUploadRate = makeRateLogger(log, '  blocks upload', blockEntries.length)
   await runWithConcurrency(
     blockEntries,
     concurrency,
@@ -444,13 +427,14 @@ export async function addBalanceEventsToPot(
       }
       blockRefs[i] = { key: numberKey, ref: reference.toUint8Array() }
     },
-    (done, total) => log(`  blocks upload ${done}/${total}`),
+    (done) => blockUploadRate(done),
   )
+  const blockIndexRate = makeRateLogger(log, '  blocks indexed', blockRefs.length)
   for (let i = 0; i < blockRefs.length; i++) {
     const { key, ref } = blockRefs[i]
     await indexes.byBalanceBlock.putRaw(key, ref)
+    blockIndexRate(i + 1)
   }
-  log(`  blocks indexed ${blockRefs.length}/${blockRefs.length}`)
 
   indexes.stats.addressCount += BigInt(byAddr.size)
   indexes.stats.eventCount += BigInt(eventCount)
@@ -573,6 +557,52 @@ async function* readBalanceEventsNdjson(path: string): AsyncGenerator<BalanceEve
   })
   for await (const line of rl) {
     if (line.trim()) yield JSON.parse(line) as BalanceEvent
+  }
+}
+
+/**
+ * Progress logger that mirrors `makeSaveProgressTracker` in ./swarm.ts: rate
+ * is computed over a rolling wall-clock window (default 5 s) and lines are
+ * throttled to at most one every 500 ms. Always emits when done === total so
+ * the caller doesn't have to special-case the tail.
+ */
+function makeRateLogger(
+  log: (msg: string) => void,
+  label: string,
+  total: number,
+  windowMs = 5_000,
+): (done: number) => void {
+  let lastLoggedAt = 0
+  const samples: Array<{ t: number; done: number }> = []
+  let head = 0
+
+  const rateOverWindow = (): number | null => {
+    if (samples.length - head < 2) return null
+    const first = samples[head]
+    const last = samples[samples.length - 1]
+    const dt = Math.max(1, last.t - first.t)
+    return ((last.done - first.done) / dt) * 1000
+  }
+
+  return (done: number): void => {
+    const now = Date.now()
+    const tail = samples.length > 0 ? samples[samples.length - 1] : null
+    if (tail && tail.t === now) {
+      tail.done = done
+    } else {
+      samples.push({ t: now, done })
+    }
+    while (head < samples.length && now - samples[head].t > windowMs) head++
+    if (head > 1_000 && head > samples.length >> 1) {
+      samples.splice(0, head)
+      head = 0
+    }
+    const isFinal = done === total
+    if (!isFinal && now - lastLoggedAt < 500) return
+    const rate = rateOverWindow()
+    const rateStr = rate !== null ? `${rate.toFixed(1)}/s over ${windowMs / 1000}s` : 'warming up'
+    log(`${label} ${done}/${total} (${rateStr})`)
+    lastLoggedAt = now
   }
 }
 

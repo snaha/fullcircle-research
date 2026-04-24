@@ -35,6 +35,7 @@ function parseArgs(argv: string[]): {
   target?: string
   blockNumber?: number
   perBlock?: number | { start: number; end: number }
+  noState: boolean
 } {
   const result: {
     beeUrl?: string
@@ -43,7 +44,8 @@ function parseArgs(argv: string[]): {
     target?: string
     blockNumber?: number
     perBlock?: number | { start: number; end: number }
-  } = {}
+    noState: boolean
+  } = { noState: false }
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
@@ -55,6 +57,8 @@ function parseArgs(argv: string[]): {
       result.dbPath = argv[++i]
     } else if (arg === '--block' && argv[i + 1]) {
       result.blockNumber = parseInt(argv[++i], 10)
+    } else if (arg === '--no-state') {
+      result.noState = true
     } else if (arg === '--per-block' && argv[i + 1]) {
       const val = argv[++i]
       if (val.includes('..')) {
@@ -85,6 +89,7 @@ if (!args.batchId) {
   console.error('  --db <path>         SQLite database path (default: data/index.sqlite)')
   console.error('  --block <number>    Upload only a specific block number')
   console.error('  --per-block <n|start..end>  Process blocks by position (e.g., 5 or 1000..2000)')
+  console.error('  --no-state          Skip balance-events (account / balance-block) indexing')
   console.error('')
   console.error('Examples:')
   console.error('  pnpm era:upload-sqlite --batch-id abc123... 0')
@@ -92,6 +97,7 @@ if (!args.batchId) {
   console.error('  pnpm era:upload-sqlite --batch-id abc123... --block 100 0')
   console.error('  pnpm era:upload-sqlite --batch-id abc123... --per-block 5 0')
   console.error('  pnpm era:upload-sqlite --batch-id abc123... --per-block 1000..2000 0')
+  console.error('  pnpm era:upload-sqlite --batch-id abc123... --no-state 0..6')
   process.exit(1)
 }
 
@@ -128,9 +134,16 @@ const indexer = openSqliteIndexer({
 })
 
 const totals = { blocksAdded: 0, blocksSkipped: 0, txHashesAdded: 0 }
+const stateTotals = { addressCount: 0, blockCount: 0, eventCount: 0 }
 const runStarted = Date.now()
 
-let stats: { blockCount: number; txCount: number; dbSizeBytes: number }
+let stats: {
+  blockCount: number
+  txCount: number
+  accountCount: number
+  balanceBlockCount: number
+  dbSizeBytes: number
+}
 
 if (args.perBlock) {
   const range = typeof args.perBlock === 'number' ? { start: 0, end: args.perBlock } : args.perBlock
@@ -211,6 +224,49 @@ if (args.perBlock) {
   )
 }
 
+// Balance events → accounts / balance_blocks tables. Skipped in --block,
+// --per-block, and --no-state modes; those flows are for spot uploads and
+// shouldn't rewrite the state tables mid-run.
+if (!args.noState && args.blockNumber === undefined && !args.perBlock) {
+  const eventsPaths = uploadable.map((t) => t.balanceEventsPath).filter((p) => existsSync(p))
+  const skipped = uploadable.length - eventsPaths.length
+  if (eventsPaths.length > 0) {
+    console.log('\n== state ==')
+    if (skipped > 0) {
+      console.log(`note: ${skipped} era(s) have no balance-events file — skipping those`)
+    }
+    const started = Date.now()
+    const stateRes = await indexer.addBalanceEventsFromNdjson(bee, eventsPaths, {
+      batchId,
+      onProgress: (msg) => console.log(`       ${msg}`),
+    })
+    stateTotals.addressCount = stateRes.addressCount
+    stateTotals.blockCount = stateRes.blockCount
+    stateTotals.eventCount = stateRes.eventCount
+    console.log(
+      `       added ${stateRes.addressCount} accounts, ${stateRes.blockCount} block-event rows, ${stateRes.eventCount} events in ${Date.now() - started} ms`,
+    )
+  } else {
+    console.log(
+      '\nno balance-events files found — run "pnpm era:state-extract" first to index state',
+    )
+  }
+}
+
+// Write aggregate counts into the DB's `meta` table — keeps the DB
+// self-describing so the explorer doesn't need a separate meta chunk or
+// envelope ref. Skipped in spot-upload modes to avoid clobbering meta from
+// a prior full run with partial-run counts.
+if (args.blockNumber === undefined && !args.perBlock) {
+  console.log('\n== writing meta ==')
+  const meta = indexer.writeMeta(stateTotals.eventCount)
+  console.log(
+    `       firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}` +
+      ` blockCount=${meta.blockCount} txCount=${meta.txCount}` +
+      ` addressCount=${meta.addressCount} eventCount=${meta.eventCount}`,
+  )
+}
+
 // Compact database before uploading
 console.log('\n== compacting database ==')
 indexer.vacuum()
@@ -260,6 +316,9 @@ const metadata = {
   blocksIndexed: totals.blocksAdded,
   blocksSkipped: totals.blocksSkipped,
   txHashesIndexed: totals.txHashesAdded,
+  addressesUploaded: stateTotals.addressCount,
+  stateBlocksUploaded: stateTotals.blockCount,
+  eventsUploaded: stateTotals.eventCount,
   dbSizeBytes: stats.dbSizeBytes,
 }
 await writeFile(metadataPath, JSON.stringify(metadata, null, 2))
@@ -269,7 +328,8 @@ const elapsed = Date.now() - runStarted
 console.log(`\n== summary ==`)
 const summarySkipMsg = totals.blocksSkipped > 0 ? `, ${totals.blocksSkipped} skipped` : ''
 console.log(
-  `       indexed ${totals.blocksAdded} blocks${summarySkipMsg}, ${totals.txHashesAdded} txs in ${elapsed} ms`,
+  `       indexed ${totals.blocksAdded} blocks${summarySkipMsg}, ${totals.txHashesAdded} txs,` +
+    ` ${stateTotals.addressCount} accounts, ${stateTotals.eventCount} events in ${elapsed} ms`,
 )
 console.log(`       db ref: ${dbRef}`)
 console.log(`       metadata:   ${metadataPath}`)

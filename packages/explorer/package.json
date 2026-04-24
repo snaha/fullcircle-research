@@ -18,6 +18,7 @@
   "dependencies": {
     "@ethersphere/bee-js": "^11.1.1",
     "@fullcircle/era": "workspace:*",
+    "@fullcircle/pot": "workspace:*",
     "@snaha/swarm-id": "^0.1.2",
     "sql.js-httpvfs": "^0.8.12"
   },
