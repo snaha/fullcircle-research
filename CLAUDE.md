@@ -29,13 +29,24 @@ pnpm workspace. Single package today; UI / other packages slot in under
   - [src/download.ts](./packages/era/src/download.ts) -- entry: fetch erae file(s) into [data/](./data/).
   - [src/process.ts](./packages/era/src/process.ts) -- entry: parse cached erae file(s), write `.summary.json` / `.blocks.ndjson` / `.index.ndjson`.
   - [src/download-and-process.ts](./packages/era/src/download-and-process.ts) -- entry: both, in one pass.
-- [data/](./data/) -- gitignored. Cached `.erae` downloads plus per-era output: `.summary.json`, `.blocks.ndjson` (full blocks as hex), `.index.ndjson` (interleaved `block` / `tx` records — scan to build number↔hash and txHash→location maps; append-friendly for an RPC tail).
+- [packages/proxy/](./packages/proxy/) -- `@fullcircle/proxy` — TypeScript forward proxy (HTTP + WebSocket) that sits between uploaders and any Bee node (local queen, remote self-hosted — point `--bee-url http://localhost:1733`). Not a dev-only tool; primary value is **upload dedup + connection resilience** for uploads to flaky mainnet nodes. Plain HTTP upstream only (both `http://` and `ws://`).
+  - **Cacheable HTTP endpoints**: `POST /bytes`, `/chunks`, `/bzz`, `/soc/{owner}/{id}`. 2xx responses cached in SQLite keyed by `(sha256(body), batch_id, path)`; repeat uploads short-circuit with no upstream round-trip. Non-2xx responses pass through unchanged. Mutable endpoints (`/feeds`, `/stamps`) are never cached.
+  - **Cacheable WebSocket**: `GET /chunks/stream` is proxied with per-frame caching — each binary frame is hashed, a cache hit synthesises the empty-binary ack with no upstream traffic, cache miss forwards to upstream and stores on ack. Acks are drained in client FIFO order so hits can't overtake unacked misses.
+  - **Retry / reconnect**: connection-level upstream failures (`ECONNRESET`, `ETIMEDOUT`, etc.) are retried with exponential backoff — 5 attempts, 200ms base. On the WS path, if upstream drops the proxy reconnects and replays still-pending frames in order; Bee is content-addressed so retries are idempotent.
+  - **Per-upstream cache DB**: default `<data>/proxy-cache-<host>_<port>.db` — switching `--upstream` doesn't cross-contaminate caches.
+  - Structured log line per HTTP request (method / path / status / latency / byte counts / postage batch id + running tally / `cache=hit|miss|skip`) and per WS session (`frames`, `hit`, `miss`, duration).
+  - [src/bin.ts](./packages/proxy/src/bin.ts) -- CLI entry: `--listen`, `--upstream`, `--cache-db` (default per-upstream; `off` disables caching).
+  - [src/proxy.ts](./packages/proxy/src/proxy.ts) -- HTTP server: streams non-cacheable requests; buffers + dedups uploads; retries on network errors. Registers the upgrade handler for WS.
+  - [src/ws-proxy.ts](./packages/proxy/src/ws-proxy.ts) -- `/chunks/stream` forward: FIFO queue preserves ack order; upstream reconnect with backoff; payloads retained for replay.
+  - [src/cache.ts](./packages/proxy/src/cache.ts) -- SQLite store using built-in `node:sqlite` (no native-module compile; Node 22+). Only stores 2xx responses (HTTP) or ack'd chunks (WS).
+- [data/](./data/) -- gitignored. Cached `.erae` downloads plus per-era output: `.summary.json`, `.blocks.ndjson` (full blocks as hex), `.index.ndjson` (interleaved `block` / `tx` records — scan to build number↔hash and txHash→location maps; append-friendly for an RPC tail). Also holds `proxy-cache.db` when the dev proxy runs.
 
 Package manager: **pnpm** (not npm). Root scripts:
 - `pnpm era:download [range|url]` -- download only
 - `pnpm era:process [range|url]` -- parse cached files only
 - `pnpm era:download-and-process [range|url]` -- both
 - `pnpm bee:start` -- boot the local Bee stack (geth dev chain + queen) via [`docker/compose.yml`](./docker/compose.yml); queen API on `:1633`, chain RPC on `:9545`. Also `bee:start:workers` (4 workers behind a profile), `bee:stop`, `bee:logs`, `bee:fresh`, `bee:stamp`.
+- `pnpm proxy:start` / `proxy:dev` -- run `@fullcircle/proxy` in front of any Bee (default upstream `127.0.0.1:1633`; override via `-- --upstream HOST:PORT`). Uploaders opt in by pointing at `http://localhost:1733` instead of `:1633`.
 - `pnpm lint` / `pnpm format` / `pnpm knip` / `pnpm check:all` -- forward via `pnpm -r --if-present` to every package that defines the matching script.
 
 ## Tooling (prettier, eslint, knip)

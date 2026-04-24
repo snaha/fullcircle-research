@@ -185,6 +185,8 @@ async function fetchBundleViaPot(index: Index, key: string): Promise<Uint8Array>
       byNumber: settings.potByNumber,
       byHash: settings.potByHash,
       byTx: settings.potByTx,
+      byAddress: settings.potByAddress,
+      byBalanceBlock: settings.potByBalanceBlock,
     },
   })
   if (!ref) throw new Error(`not found in POT ${index}: ${key}`)
@@ -248,6 +250,8 @@ export async function probeIndex(index: Index, key: string): Promise<boolean> {
         byNumber: settings.potByNumber,
         byHash: settings.potByHash,
         byTx: settings.potByTx,
+        byAddress: settings.potByAddress,
+        byBalanceBlock: settings.potByBalanceBlock,
       },
     })
     return ref !== null
@@ -258,23 +262,43 @@ export async function probeIndex(index: Index, key: string): Promise<boolean> {
 
 /**
  * Fetch the per-address account record (final balance + full event log).
- * Address-balance data is only indexed in the Mantaray manifest source today —
- * POT has no address KVS, so this throws when called on a POT source.
+ * Served from the Mantaray `address/` sub-manifest or the POT `byAddress`
+ * KVS. SQLite has no address index today, so this throws for SQLite sources.
  */
 export async function fetchAccount(addr: string): Promise<AccountRecord> {
-  if (settings.source !== 'manifest') {
-    throw new Error('Address lookup is not available on POT sources — select a manifest source.')
-  }
   const normalized = addr.toLowerCase().replace(/^0x/, '')
   if (!/^[0-9a-f]{40}$/.test(normalized)) {
     throw new Error(`invalid address: ${addr}`)
   }
-  const url = `${settings.beeUrl}/bzz/${settings.manifestRef}/address/${normalized}`
-  const res = await fetch(url)
-  if (!res.ok) {
-    if (res.status === 404) throw new Error(`address not indexed: 0x${normalized}`)
-    throw new Error(`bee ${res.status} ${res.statusText}: address/${normalized}`)
+
+  if (settings.source === 'manifest') {
+    const url = `${settings.beeUrl}/bzz/${settings.manifestRef}/address/${normalized}`
+    const res = await fetch(url)
+    if (!res.ok) {
+      if (res.status === 404) throw new Error(`address not indexed: 0x${normalized}`)
+      throw new Error(`bee ${res.status} ${res.statusText}: address/${normalized}`)
+    }
+    return (await res.json()) as AccountRecord
   }
-  const record = (await res.json()) as AccountRecord
-  return record
+
+  if (settings.source === 'pot') {
+    const ref = await getBundleRef('byAddress', normalized, {
+      beeUrl: settings.beeUrl,
+      refs: {
+        byNumber: settings.potByNumber,
+        byHash: settings.potByHash,
+        byTx: settings.potByTx,
+        byAddress: settings.potByAddress,
+        byBalanceBlock: settings.potByBalanceBlock,
+      },
+    })
+    if (!ref) throw new Error(`address not indexed: 0x${normalized}`)
+    const res = await fetch(`${settings.beeUrl}/bytes/${ref}`)
+    if (!res.ok) {
+      throw new Error(`bee ${res.status} ${res.statusText}: /bytes/${ref}`)
+    }
+    return (await res.json()) as AccountRecord
+  }
+
+  throw new Error('Address lookup is not available on SQLite sources yet.')
 }

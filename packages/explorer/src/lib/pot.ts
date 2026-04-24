@@ -6,11 +6,14 @@
 // key in the corresponding KVS.
 //
 // POT values from this project's uploader are raw 32-byte Swarm references;
-// the bundle bytes themselves live at `${beeUrl}/bytes/${ref}`. Keys follow
-// the same encoding as `packages/era/src/swarm-pot.ts`:
-//   byNumber  key = block number as a JS number (POT serialises to 8-byte BE IEEE-754)
-//   byHash    key = 32-byte raw block hash
-//   byTx      key = 32-byte raw tx hash
+// the bundle / account / block-events bytes themselves live at
+// `${beeUrl}/bytes/${ref}`. Keys follow the same encoding as
+// `packages/era/src/swarm-pot.ts`:
+//   byNumber        key = block number as a JS number (POT serialises to 8-byte BE IEEE-754)
+//   byHash          key = 32-byte raw block hash
+//   byTx            key = 32-byte raw tx hash
+//   byAddress       key = 20-byte raw address
+//   byBalanceBlock  key = block number as a JS number
 
 import { browser } from '$app/environment'
 
@@ -89,6 +92,8 @@ export interface PotRefs {
   byNumber: string
   byHash: string
   byTx: string
+  byAddress: string
+  byBalanceBlock: string
 }
 
 export type PotIndex = keyof PotRefs
@@ -144,15 +149,21 @@ export async function getBundleRef(
 }
 
 function encodeKey(index: PotIndex, key: string): number | Uint8Array {
-  if (index === 'byNumber') {
+  if (index === 'byNumber' || index === 'byBalanceBlock') {
     const n = Number(key)
     if (!Number.isSafeInteger(n) || n < 0) {
       throw new Error(`invalid block number: ${key}`)
     }
     return n
   }
-  const normalized = key.toLowerCase().startsWith('0x') ? key.slice(2) : key
-  if (!/^[0-9a-f]{64}$/.test(normalized.toLowerCase())) {
+  const normalized = (key.toLowerCase().startsWith('0x') ? key.slice(2) : key).toLowerCase()
+  if (index === 'byAddress') {
+    if (!/^[0-9a-f]{40}$/.test(normalized)) {
+      throw new Error(`invalid address: ${key}`)
+    }
+    return hexToBytes(normalized)
+  }
+  if (!/^[0-9a-f]{64}$/.test(normalized)) {
     throw new Error(`invalid hash: ${key}`)
   }
   return hexToBytes(normalized)

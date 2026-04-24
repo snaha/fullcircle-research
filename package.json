@@ -13,6 +13,7 @@
     "era:upload-pot": "pnpm --filter @fullcircle/era run upload-pot",
     "era:state-extract": "pnpm --filter @fullcircle/era run state-extract",
     "era:upload-sqlite": "pnpm --filter @fullcircle/era run upload-sqlite",
+    "era:publish-refs": "pnpm --filter @fullcircle/era run publish-refs",
     "era:feed-diag": "pnpm --filter @fullcircle/era run feed-diag",
     "rpc:dev": "pnpm --filter @fullcircle/rpc run dev",
     "rpc:start": "pnpm --filter @fullcircle/rpc run start",
@@ -20,6 +21,7 @@
     "demo:build": "pnpm --filter @fullcircle/demo run build",
     "explorer:dev": "pnpm --filter @fullcircle/explorer run dev",
     "explorer:build": "pnpm --filter @fullcircle/explorer run build",
+    "explorer:publish-to-swarm": "pnpm --filter @fullcircle/explorer run publish-to-swarm",
     "lint": "pnpm -r --if-present run lint",
     "format": "pnpm -r --if-present run format",
     "knip": "pnpm -r --if-present run knip",
@@ -30,6 +32,8 @@
     "bee:logs": "docker compose -f docker/compose.yml logs -f queen",
     "bee:fresh": "docker/scripts/fresh.sh",
     "bee:stamp": "docker/scripts/buy-stamp.sh",
+    "proxy:start": "pnpm --filter @fullcircle/proxy run start",
+    "proxy:dev": "pnpm --filter @fullcircle/proxy run dev",
     "test": "pnpm -r run test"
   },
   "devDependencies": {

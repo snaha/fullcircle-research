@@ -1,14 +1,16 @@
 // CLI entry point for uploading block data to Swarm via POT JS indexes.
 //
 // Mirror of ./upload.ts, but with POT-backed indexing instead of Mantaray.
-// Produces `eras-<range>.pot.json` with the four root references
-// (byNumber / byHash / byTx / meta) and upload stats.
+// Produces `eras-<range>.pot.json` with every root reference
+// (byNumber / byHash / byTx / byAddress / byBalanceBlock / meta), the
+// consolidated `envelope` ref, and upload stats.
 //
 // Usage:
-//   pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [range]
+//   pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [--no-state] [range]
 //   pnpm era:upload-pot --batch-id abc123... 0..6
 //   pnpm era:upload-pot --batch-id abc123... --refs data/eras-0.pot.json 1
 //   pnpm era:upload-pot --bee-url http://bee.example.com --batch-id abc123... 5
+//   pnpm era:upload-pot --batch-id abc123... --no-state 0..6   # skip balance events
 
 import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -16,7 +18,9 @@ import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
 import { DATA_DIR, header, parseFeedSignerFlag, resolveTargets, type Target } from './cli-shared.js'
 import { loadSigner, tryPublishFeedUpdate, uploadPotEnvelope } from './feed-publisher.js'
+import { saveLatestRefs } from './refs-state.js'
 import {
+  addBalanceEventsToPot,
   addBlocksToPot,
   getPotBlockRange,
   openPotIndexes,
@@ -32,15 +36,17 @@ interface CliArgs {
   batchId?: string
   refsPath?: string
   target?: string
+  noState: boolean
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const result: CliArgs = {}
+  const result: CliArgs = { noState: false }
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--bee-url' && argv[i + 1]) result.beeUrl = argv[++i]
     else if (arg === '--batch-id' && argv[i + 1]) result.batchId = argv[++i]
     else if (arg === '--refs' && argv[i + 1]) result.refsPath = argv[++i]
+    else if (arg === '--no-state') result.noState = true
     else if (!arg.startsWith('--')) result.target = arg
   }
   return result
@@ -54,10 +60,14 @@ interface PotMetaFile {
   batchId: string
   extendedFrom: string | null
   indexes: PotIndexRefs
+  envelope: string | null
   firstBlock: string | null
   lastBlock: string | null
   blocksUploaded: number
   txHashesIndexed: number
+  addressesUploaded: number
+  stateBlocksUploaded: number
+  eventsUploaded: number
 }
 
 async function loadExistingRefs(path: string): Promise<PotIndexRefs> {
@@ -66,7 +76,14 @@ async function loadExistingRefs(path: string): Promise<PotIndexRefs> {
   if (!meta.indexes?.byNumber || !meta.indexes?.byHash || !meta.indexes?.byTx) {
     throw new Error(`${path}: missing indexes.{byNumber,byHash,byTx}`)
   }
-  return { ...meta.indexes, meta: meta.indexes.meta ?? null }
+  return {
+    byNumber: meta.indexes.byNumber,
+    byHash: meta.indexes.byHash,
+    byTx: meta.indexes.byTx,
+    byAddress: meta.indexes.byAddress ?? '',
+    byBalanceBlock: meta.indexes.byBalanceBlock ?? '',
+    meta: meta.indexes.meta ?? null,
+  }
 }
 
 // ---------- Duration helpers ----------
@@ -105,12 +122,17 @@ if (!args.batchId) {
   console.error('error: --batch-id is required')
   console.error('')
   console.error('Usage:')
-  console.error('  pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [range]')
+  console.error(
+    '  pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [--no-state] [range]',
+  )
   console.error('')
   console.error('Examples:')
   console.error('  pnpm era:upload-pot --batch-id abc123... 0')
   console.error('  pnpm era:upload-pot --batch-id abc123... --refs data/eras-0.pot.json 1')
   console.error('  pnpm era:upload-pot --bee-url http://bee.example.com --batch-id abc123... 5')
+  console.error(
+    '  pnpm era:upload-pot --batch-id abc123... --no-state 0..6   # skip balance events',
+  )
   process.exit(1)
 }
 
@@ -169,6 +191,31 @@ for (const t of uploadable) {
   )
 }
 
+const stateTotals = { addressCount: 0, blockCount: 0, eventCount: 0 }
+if (!args.noState) {
+  const eventsPaths = uploadable.map((t) => t.balanceEventsPath).filter((p) => existsSync(p))
+  const skipped = uploadable.length - eventsPaths.length
+  if (eventsPaths.length > 0) {
+    console.log('\n== state ==')
+    if (skipped > 0) {
+      console.log(`note: ${skipped} era(s) have no balance-events file — skipping those`)
+    }
+    const stateRes = await timed('add state events', () =>
+      addBalanceEventsToPot(bee, indexes, eventsPaths, {
+        batchId,
+        onProgress: (msg) => console.log(`       ${msg}`),
+      }),
+    )
+    stateTotals.addressCount = stateRes.addressCount
+    stateTotals.blockCount = stateRes.blockCount
+    stateTotals.eventCount = stateRes.eventCount
+  } else {
+    console.log(
+      '\nno balance-events files found — run "pnpm era:state-extract" first to index state',
+    )
+  }
+}
+
 console.log('\n== saving POT indexes ==')
 const meta = await timed('write meta', () =>
   writePotBlockRangeMeta(bee, indexes, {
@@ -177,10 +224,12 @@ const meta = await timed('write meta', () =>
   }),
 )
 const indexRefs = await timed('save indexes', () => savePotIndexes(indexes))
-console.log(`       byNumber: ${indexRefs.byNumber}`)
-console.log(`       byHash:   ${indexRefs.byHash}`)
-console.log(`       byTx:     ${indexRefs.byTx}`)
-console.log(`       meta:     ${indexRefs.meta ?? '(none)'}`)
+console.log(`       byNumber:       ${indexRefs.byNumber}`)
+console.log(`       byHash:         ${indexRefs.byHash}`)
+console.log(`       byTx:           ${indexRefs.byTx}`)
+console.log(`       byAddress:      ${indexRefs.byAddress}`)
+console.log(`       byBalanceBlock: ${indexRefs.byBalanceBlock}`)
+console.log(`       meta:           ${indexRefs.meta ?? '(none)'}`)
 
 if (meta) {
   console.log(`after:  firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}`)
@@ -199,6 +248,20 @@ const rangeLabel =
       : `${firstEra}-${lastEra}`
     : uploadable[0].fileBase
 
+// Upload a single envelope JSON carrying every POT ref (+ meta). Done
+// unconditionally so a user with no feed signer still gets one pasteable
+// reference instead of six. The feed (if enabled) also stores this ref.
+const envelopeRef = await timed('upload envelope', () =>
+  uploadPotEnvelope(bee, batchId, {
+    byNumber: indexRefs.byNumber,
+    byHash: indexRefs.byHash,
+    byTx: indexRefs.byTx,
+    byAddress: indexRefs.byAddress,
+    byBalanceBlock: indexRefs.byBalanceBlock,
+    meta: indexRefs.meta,
+  }),
+)
+
 const metaPath = resolve(DATA_DIR, `eras-${rangeLabel}.pot.json`)
 const metaFile: PotMetaFile = {
   eras: uploadable.map((t) => t.era).filter((e): e is number => e !== null),
@@ -208,36 +271,31 @@ const metaFile: PotMetaFile = {
   batchId,
   extendedFrom: args.refsPath ?? null,
   indexes: indexRefs,
+  envelope: envelopeRef,
   firstBlock: meta?.firstBlock ?? null,
   lastBlock: meta?.lastBlock ?? null,
   blocksUploaded: totals.blocksUploaded,
   txHashesIndexed: totals.txHashesIndexed,
+  addressesUploaded: stateTotals.addressCount,
+  stateBlocksUploaded: stateTotals.blockCount,
+  eventsUploaded: stateTotals.eventCount,
 }
 await writeFile(metaPath, JSON.stringify(metaFile, null, 2))
 
 console.log(
-  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs in ${formatDuration(elapsed)}`,
+  `\nupload ${totals.blocksUploaded} blocks, ${totals.txHashesIndexed} txs,` +
+    ` ${stateTotals.addressCount} addresses, ${stateTotals.eventCount} events` +
+    ` in ${formatDuration(elapsed)}`,
 )
+console.log(`       envelope: ${envelopeRef}`)
 console.log(`       written:  ${metaPath}`)
 
-// Upload an envelope JSON carrying all four POT refs; the feed stores only
-// its ref. The explorer fetches and parses it at lookup time.
 const signer = loadSigner(parseFeedSignerFlag(process.argv))
-const envelopeRef = signer
-  ? await uploadPotEnvelope(bee, batchId, {
-      byNumber: indexRefs.byNumber,
-      byHash: indexRefs.byHash,
-      byTx: indexRefs.byTx,
-      meta: indexRefs.meta,
-    })
-  : null
-if (envelopeRef) {
-  console.log(`       envelope: ${envelopeRef}`)
-}
-await tryPublishFeedUpdate({
+const feedResult = await tryPublishFeedUpdate({
   kind: 'pot',
-  referenceHex: envelopeRef ?? '0'.repeat(64),
+  referenceHex: envelopeRef,
   bee,
   batchId,
   signer,
 })
+await saveLatestRefs({ pot: envelopeRef, publisher: feedResult?.owner })

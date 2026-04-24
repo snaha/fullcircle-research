@@ -23,6 +23,7 @@ import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
 import { DATA_DIR, header, parseFeedSignerFlag, resolveTargets, type Target } from './cli-shared.js'
 import { loadSigner, tryPublishFeedUpdate } from './feed-publisher.js'
+import { saveLatestRefs } from './refs-state.js'
 import { openSqliteIndexer } from './swarm-sqlite.js'
 
 // ---------- Parse arguments ----------
@@ -273,7 +274,7 @@ console.log(
 console.log(`       db ref: ${dbRef}`)
 console.log(`       metadata:   ${metadataPath}`)
 
-await tryPublishFeedUpdate({
+const feedResult = await tryPublishFeedUpdate({
   kind: 'sqlite',
   referenceHex: dbRef,
   bee,
@@ -281,3 +282,4 @@ await tryPublishFeedUpdate({
   signer: loadSigner(parseFeedSignerFlag(process.argv)),
   tagUid: syncResult.tagUid ?? undefined,
 })
+await saveLatestRefs({ sqlite: dbRef, publisher: feedResult?.owner })

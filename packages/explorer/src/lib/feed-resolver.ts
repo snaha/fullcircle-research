@@ -6,9 +6,10 @@
 //
 //   manifest → the manifest root ref (used directly via /bzz/{ref}/...)
 //   sqlite   → the dbRef (used directly via /bytes/{ref} with Range)
-//   pot      → ref of a tiny JSON envelope { byNumber, byHash, byTx, meta }
-//              that this module fetches and parses, giving the explorer all
-//              four POT refs in one shot
+//   pot      → ref of a tiny JSON envelope
+//              { byNumber, byHash, byTx, byAddress, byBalanceBlock, meta }
+//              that this module fetches and parses, giving the explorer every
+//              POT ref in one shot
 
 import { Bee, EthAddress } from '@ethersphere/bee-js'
 import { createSyncEpochFinder } from '@snaha/swarm-id'
@@ -29,6 +30,8 @@ export interface ResolvedPot {
   byNumber: string
   byHash: string
   byTx: string
+  byAddress: string
+  byBalanceBlock: string
   meta: string | null
 }
 
@@ -68,6 +71,20 @@ export async function resolveLatest(
   }
 
   // pot → fetch the envelope JSON from Swarm and parse it
+  return fetchPotEnvelope(beeUrl, refHex)
+}
+
+/**
+ * Fetch and parse the POT envelope JSON at `envelopeRef`. Exposed so the
+ * Settings panel can accept a single envelope ref in place of pasting every
+ * POT ref individually. `byAddress` / `byBalanceBlock` are optional for
+ * backwards-compatibility with envelopes from older uploaders.
+ */
+export async function fetchPotEnvelope(beeUrl: string, envelopeRef: string): Promise<ResolvedPot> {
+  const refHex = envelopeRef.trim().toLowerCase().replace(/^0x/, '')
+  if (!/^[0-9a-f]{64}$/.test(refHex)) {
+    throw new Error(`pot envelope ref must be 64-char hex; got "${envelopeRef}"`)
+  }
   const res = await fetch(`${beeUrl}/bytes/${refHex}`)
   if (!res.ok) {
     throw new Error(`pot envelope fetch failed: ${res.status} ${res.statusText} (ref ${refHex})`)
@@ -76,6 +93,8 @@ export async function resolveLatest(
     byNumber?: string
     byHash?: string
     byTx?: string
+    byAddress?: string
+    byBalanceBlock?: string
     meta?: string | null
   }
   if (!envelope.byNumber || !envelope.byHash || !envelope.byTx) {
@@ -86,6 +105,8 @@ export async function resolveLatest(
     byNumber: envelope.byNumber,
     byHash: envelope.byHash,
     byTx: envelope.byTx,
+    byAddress: envelope.byAddress ?? '',
+    byBalanceBlock: envelope.byBalanceBlock ?? '',
     meta: envelope.meta ?? null,
   }
 }

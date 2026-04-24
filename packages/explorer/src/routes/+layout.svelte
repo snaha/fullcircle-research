@@ -9,6 +9,7 @@
   import { Label } from '$lib/components/ui/label'
   import {
     hasSource,
+    hydratePotFromEnvelope,
     isAddress,
     isHex64,
     resolveActiveSourceFromFeed,
@@ -23,21 +24,46 @@
   let { children } = $props()
 
   let beeInput = $state(settings.beeUrl)
+  let useFeedInput = $state(settings.useFeed)
   let sourceInput = $state<Source>(settings.source)
   let publisherInput = $state(settings.publisherAddress)
   let manifestInput = $state(settings.manifestRef)
   let potByNumberInput = $state(settings.potByNumber)
   let potByHashInput = $state(settings.potByHash)
   let potByTxInput = $state(settings.potByTx)
+  let potByAddressInput = $state(settings.potByAddress)
+  let potByBalanceBlockInput = $state(settings.potByBalanceBlock)
   let potMetaInput = $state(settings.potMeta)
+  let potEnvelopeInput = $state('')
+  let envelopeBusy = $state(false)
+  let envelopeError = $state('')
   let sqliteDbRefInput = $state(settings.sqliteDbRef)
   let sqliteMetaInput = $state(settings.sqliteMeta)
   let settingsOpen = $state(!hasSource())
   let resolving = $state(false)
   let resolveError = $state('')
 
-  // When a valid publisher address is provided, the source's primary ref may
-  // be left blank and resolved on save. Keep the UI hint consistent with that.
+  // Background-resolve from feed on mount when useFeed is on.
+  // Uses the baked-in ref as fallback if the feed is unreachable.
+  $effect(() => {
+    if (settings.useFeed && isAddress(settings.publisherAddress)) {
+      resolveActiveSourceFromFeed().catch(() => {})
+    }
+  })
+
+  // Sync dialog inputs when settings change (e.g. after background resolve)
+  $effect(() => {
+    manifestInput = settings.manifestRef
+    potByNumberInput = settings.potByNumber
+    potByHashInput = settings.potByHash
+    potByTxInput = settings.potByTx
+    potByAddressInput = settings.potByAddress
+    potByBalanceBlockInput = settings.potByBalanceBlock
+    potMetaInput = settings.potMeta
+    sqliteDbRefInput = settings.sqliteDbRef
+    sqliteMetaInput = settings.sqliteMeta
+  })
+
   let hasPublisher = $derived(isAddress(publisherInput.trim().toLowerCase().replace(/^0x/, '')))
 
   const etherscanUrl = $derived.by(() => {
@@ -48,13 +74,6 @@
     return 'https://etherscan.io'
   })
 
-  function needsPrimaryRef(): boolean {
-    if (hasPublisher) return false
-    if (sourceInput === 'manifest') return !isHex64(normHex(manifestInput))
-    if (sourceInput === 'sqlite') return !isHex64(normHex(sqliteDbRefInput))
-    return !isHex64(normHex(potByNumberInput)) || !isHex64(normHex(potByHashInput))
-  }
-
   function normHex(s: string): string {
     return s.trim().toLowerCase().replace(/^0x/, '')
   }
@@ -64,34 +83,31 @@
     resolveError = ''
     saveSettings({
       beeUrl: beeInput,
+      useFeed: useFeedInput,
       source: sourceInput,
       publisherAddress: publisherInput,
       manifestRef: manifestInput,
       potByNumber: potByNumberInput,
       potByHash: potByHashInput,
       potByTx: potByTxInput,
+      potByAddress: potByAddressInput,
+      potByBalanceBlock: potByBalanceBlockInput,
       potMeta: potMetaInput,
       sqliteDbRef: sqliteDbRefInput,
       sqliteMeta: sqliteMetaInput,
     })
 
-    // Only resolve from the feed when the primary ref for the active source
-    // is blank — pasted refs take precedence so operators can pin snapshots.
-    const needsResolve =
-      isAddress(settings.publisherAddress) &&
-      ((sourceInput === 'manifest' && !isHex64(settings.manifestRef)) ||
-        (sourceInput === 'sqlite' && !isHex64(settings.sqliteDbRef)) ||
-        (sourceInput === 'pot' && (!isHex64(settings.potByNumber) || !isHex64(settings.potByHash))))
-
-    if (needsResolve) {
+    // When use feed is on and a publisher is configured, always re-resolve.
+    if (useFeedInput && isAddress(settings.publisherAddress)) {
       resolving = true
       try {
         await resolveActiveSourceFromFeed()
-        // Sync inputs so a second save button press shows the resolved values.
         manifestInput = settings.manifestRef
         potByNumberInput = settings.potByNumber
         potByHashInput = settings.potByHash
         potByTxInput = settings.potByTx
+        potByAddressInput = settings.potByAddress
+        potByBalanceBlockInput = settings.potByBalanceBlock
         potMetaInput = settings.potMeta
         sqliteDbRefInput = settings.sqliteDbRef
         sqliteMetaInput = settings.sqliteMeta
@@ -104,6 +120,31 @@
     }
 
     settingsOpen = false
+  }
+
+  async function hydrateEnvelope() {
+    envelopeError = ''
+    const ref = potEnvelopeInput.trim()
+    if (!ref) {
+      envelopeError = 'paste an envelope ref first'
+      return
+    }
+    envelopeBusy = true
+    try {
+      settings.beeUrl = beeInput.trim().replace(/\/$/, '')
+      await hydratePotFromEnvelope(ref)
+      potByNumberInput = settings.potByNumber
+      potByHashInput = settings.potByHash
+      potByTxInput = settings.potByTx
+      potByAddressInput = settings.potByAddress
+      potByBalanceBlockInput = settings.potByBalanceBlock
+      potMetaInput = settings.potMeta
+      potEnvelopeInput = ''
+    } catch (err) {
+      envelopeError = (err as Error).message
+    } finally {
+      envelopeBusy = false
+    }
   }
 
   let query = $state('')
@@ -177,6 +218,9 @@
           <Badge variant="secondary" class="font-mono">
             {sourceLabel()}
           </Badge>
+          {#if settings.useFeed}
+            <Badge variant="outline" class="font-mono">feed</Badge>
+          {/if}
         </div>
       </div>
     {/if}
@@ -202,23 +246,47 @@
           />
         </div>
 
-        <div class="flex flex-col gap-2">
-          <Label for="publisher-address"
-            >Publisher address <span class="text-muted-foreground">(optional)</span></Label
+        <!-- Use feed toggle -->
+        <div class="flex items-center justify-between rounded-lg border p-3">
+          <div class="flex flex-col gap-0.5">
+            <span class="text-sm font-medium">Use feed</span>
+            <span class="text-xs text-muted-foreground">
+              Resolve the latest index from the publisher's Swarm epoch feed
+            </span>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={useFeedInput}
+            onclick={() => (useFeedInput = !useFeedInput)}
+            class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            class:bg-primary={useFeedInput}
+            class:bg-input={!useFeedInput}
           >
-          <Input
-            id="publisher-address"
-            type="text"
-            bind:value={publisherInput}
-            placeholder="40-character hex (0x…)"
-            spellcheck="false"
-            class="font-mono"
-          />
-          <p class="text-xs text-muted-foreground">
-            When set and the refs below are blank, the explorer resolves the latest upload via the
-            publisher's Swarm feed. Paste a ref below to pin a specific snapshot.
-          </p>
+            <span
+              class="pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform"
+              class:translate-x-5={useFeedInput}
+              class:translate-x-0={!useFeedInput}
+            ></span>
+          </button>
         </div>
+
+        {#if useFeedInput}
+          <div class="flex flex-col gap-2">
+            <Label for="publisher-address">Publisher address</Label>
+            <Input
+              id="publisher-address"
+              type="text"
+              bind:value={publisherInput}
+              placeholder="40-character hex (0x…)"
+              spellcheck="false"
+              class="font-mono"
+            />
+            <p class="text-xs text-muted-foreground">
+              The explorer resolves the latest index from this publisher's feed on save.
+            </p>
+          </div>
+        {/if}
 
         <div class="flex flex-col gap-2">
           <Label>Index type</Label>
@@ -258,10 +326,10 @@
 
         {#if sourceInput === 'manifest'}
           <div class="flex flex-col gap-2">
-            <Label for="manifest-ref"
-              >Manifest reference{#if hasPublisher}
-                <span class="text-muted-foreground">(optional)</span>{/if}</Label
-            >
+            <Label for="manifest-ref">
+              Manifest reference
+              {#if useFeedInput}<span class="text-muted-foreground">(read-only — resolved from feed)</span>{/if}
+            </Label>
             <Input
               id="manifest-ref"
               type="text"
@@ -269,20 +337,23 @@
               placeholder="64-character hex"
               spellcheck="false"
               class="font-mono"
+              disabled={useFeedInput}
             />
           </div>
         {:else if sourceInput === 'sqlite'}
           <div class="flex flex-col gap-3 rounded-md border p-3">
-            <p class="text-xs text-muted-foreground">
-              Paste the database ref printed by <code class="font-mono">pnpm era:upload-sqlite</code
-              >
-              (or read from <code class="font-mono">eras-*.sqlite-index.json</code>).
-            </p>
+            {#if !useFeedInput}
+              <p class="text-xs text-muted-foreground">
+                Paste the database ref printed by <code class="font-mono">pnpm era:upload-sqlite</code
+                >
+                (or read from <code class="font-mono">eras-*.sqlite-index.json</code>).
+              </p>
+            {/if}
             <div class="flex flex-col gap-2">
-              <Label for="sqlite-db-ref"
-                >dbRef{#if hasPublisher}
-                  <span class="text-muted-foreground">(optional)</span>{/if}</Label
-              >
+              <Label for="sqlite-db-ref">
+                dbRef
+                {#if useFeedInput}<span class="text-muted-foreground">(read-only — resolved from feed)</span>{/if}
+              </Label>
               <Input
                 id="sqlite-db-ref"
                 type="text"
@@ -290,12 +361,13 @@
                 placeholder="64-character hex"
                 spellcheck="false"
                 class="font-mono"
+                disabled={useFeedInput}
               />
             </div>
             <div class="flex flex-col gap-2">
-              <Label for="sqlite-meta"
-                >meta <span class="text-muted-foreground">(optional)</span></Label
-              >
+              <Label for="sqlite-meta">
+                meta <span class="text-muted-foreground">(optional)</span>
+              </Label>
               <Input
                 id="sqlite-meta"
                 type="text"
@@ -303,6 +375,7 @@
                 placeholder="64-character hex"
                 spellcheck="false"
                 class="font-mono"
+                disabled={useFeedInput}
               />
             </div>
             <p class="text-xs text-muted-foreground">
@@ -311,15 +384,44 @@
           </div>
         {:else}
           <div class="flex flex-col gap-3 rounded-md border p-3">
-            <p class="text-xs text-muted-foreground">
-              Paste the four refs printed by <code class="font-mono">pnpm era:upload-pot</code> (or
-              read from <code class="font-mono">eras-*.pot.json</code>).
-            </p>
+            {#if !useFeedInput}
+              <p class="text-xs text-muted-foreground">
+                Paste the envelope ref printed by <code class="font-mono">pnpm era:upload-pot</code> to
+                hydrate every index in one shot, or fill the individual refs below.
+              </p>
+              <div class="flex flex-col gap-2">
+                <Label for="pot-envelope">
+                  Envelope ref <span class="text-muted-foreground">(shortcut)</span>
+                </Label>
+                <div class="flex gap-2">
+                  <Input
+                    id="pot-envelope"
+                    type="text"
+                    bind:value={potEnvelopeInput}
+                    placeholder="64-character hex — fetches and fills every POT ref"
+                    spellcheck="false"
+                    class="font-mono"
+                    disabled={envelopeBusy}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onclick={hydrateEnvelope}
+                    disabled={envelopeBusy}
+                  >
+                    {envelopeBusy ? 'Fetching…' : 'Hydrate'}
+                  </Button>
+                </div>
+                {#if envelopeError}
+                  <p class="text-xs text-red-600">envelope fetch failed: {envelopeError}</p>
+                {/if}
+              </div>
+            {/if}
             <div class="flex flex-col gap-2">
-              <Label for="pot-by-number"
-                >byNumber{#if hasPublisher}
-                  <span class="text-muted-foreground">(optional)</span>{/if}</Label
-              >
+              <Label for="pot-by-number">
+                byNumber
+                {#if useFeedInput}<span class="text-muted-foreground">(read-only — resolved from feed)</span>{/if}
+              </Label>
               <Input
                 id="pot-by-number"
                 type="text"
@@ -327,13 +429,14 @@
                 placeholder="64-character hex"
                 spellcheck="false"
                 class="font-mono"
+                disabled={useFeedInput}
               />
             </div>
             <div class="flex flex-col gap-2">
-              <Label for="pot-by-hash"
-                >byHash{#if hasPublisher}
-                  <span class="text-muted-foreground">(optional)</span>{/if}</Label
-              >
+              <Label for="pot-by-hash">
+                byHash
+                {#if useFeedInput}<span class="text-muted-foreground">(read-only — resolved from feed)</span>{/if}
+              </Label>
               <Input
                 id="pot-by-hash"
                 type="text"
@@ -341,12 +444,13 @@
                 placeholder="64-character hex"
                 spellcheck="false"
                 class="font-mono"
+                disabled={useFeedInput}
               />
             </div>
             <div class="flex flex-col gap-2">
-              <Label for="pot-by-tx"
-                >byTx <span class="text-muted-foreground">(optional)</span></Label
-              >
+              <Label for="pot-by-tx">
+                byTx <span class="text-muted-foreground">(optional)</span>
+              </Label>
               <Input
                 id="pot-by-tx"
                 type="text"
@@ -354,12 +458,41 @@
                 placeholder="64-character hex (all-zeros when no tx indexed)"
                 spellcheck="false"
                 class="font-mono"
+                disabled={useFeedInput}
               />
             </div>
             <div class="flex flex-col gap-2">
-              <Label for="pot-meta"
-                >meta <span class="text-muted-foreground">(optional)</span></Label
-              >
+              <Label for="pot-by-address">
+                byAddress <span class="text-muted-foreground">(optional)</span>
+              </Label>
+              <Input
+                id="pot-by-address"
+                type="text"
+                bind:value={potByAddressInput}
+                placeholder="64-character hex"
+                spellcheck="false"
+                class="font-mono"
+                disabled={useFeedInput}
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-by-balance-block">
+                byBalanceBlock <span class="text-muted-foreground">(optional)</span>
+              </Label>
+              <Input
+                id="pot-by-balance-block"
+                type="text"
+                bind:value={potByBalanceBlockInput}
+                placeholder="64-character hex"
+                spellcheck="false"
+                class="font-mono"
+                disabled={useFeedInput}
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <Label for="pot-meta">
+                meta <span class="text-muted-foreground">(optional)</span>
+              </Label>
               <Input
                 id="pot-meta"
                 type="text"
@@ -367,6 +500,7 @@
                 placeholder="64-character hex"
                 spellcheck="false"
                 class="font-mono"
+                disabled={useFeedInput}
               />
             </div>
             <p class="text-xs text-muted-foreground">
@@ -391,9 +525,7 @@
           <Button type="submit" disabled={resolving}>
             {#if resolving}
               Resolving…
-            {:else if needsPrimaryRef() === false && hasPublisher}
-              Save
-            {:else if hasPublisher}
+            {:else if useFeedInput && hasPublisher}
               Save &amp; resolve
             {:else}
               Save

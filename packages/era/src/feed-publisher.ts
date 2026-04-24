@@ -6,7 +6,8 @@
 //   manifest → the Mantaray manifest root ref (self-contained)
 //   sqlite   → the SQLite Merkle-tree root ref (dbRef)
 //   pot      → ref of a small JSON envelope on Swarm that carries
-//              { byNumber, byHash, byTx, meta } — see `uploadPotEnvelope`
+//              { byNumber, byHash, byTx, byAddress, byBalanceBlock, meta }
+//              — see `uploadPotEnvelope`
 //
 // The signer is read from FULLCIRCLE_FEED_SIGNER_KEY or --feed-signer-key.
 // If neither is set, publishFeedUpdate prints a warning and returns null —
@@ -249,6 +250,34 @@ export async function publishFeedUpdate(
   }
 }
 
+export interface CreateFeedManifestResult {
+  reference: string
+  owner: string
+  topic: string
+}
+
+/**
+ * Upload a feed manifest chunk to Bee for `kind`. The returned reference is
+ * deterministic (same owner + topic always maps to the same chunk), so it acts
+ * as a stable permalink: `/bzz/{reference}/` always resolves to the latest
+ * feed update without the caller needing to know the current SOC address.
+ */
+export async function createFeedManifest(
+  bee: Bee,
+  batchId: string,
+  kind: FeedKind,
+  signer: PrivateKey,
+): Promise<CreateFeedManifestResult> {
+  const ownerHex = signer.publicKey().address().toHex()
+  const topic = FEED_TOPICS[kind]
+  const reference = await bee.createFeedManifest(batchId, topic, ownerHex)
+  return {
+    reference: reference.toHex(),
+    owner: ownerHex,
+    topic: FEED_TOPIC_STRINGS[kind],
+  }
+}
+
 /**
  * Try to publish a feed update. Returns null (with a warning log) when no
  * signer is configured, so uploads continue to work without feeds.
@@ -277,6 +306,8 @@ export interface PotFeedEnvelope {
   byNumber: string
   byHash: string
   byTx: string
+  byAddress: string
+  byBalanceBlock: string
   meta: string | null
 }
 
