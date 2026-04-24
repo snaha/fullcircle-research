@@ -1,14 +1,8 @@
-// Browser bridge to the POT JS runtime.
+// Browser bridge to the POT runtime.
 //
-// Loads `/pot-web.js` + `/pot.wasm` (vendored into `static/`) on first use,
-// caches loaded KVSs by reference, and exposes `getRefBytes(index, key)` —
-// the 32-byte Swarm reference to the block bundle stored under the given
-// key in the corresponding KVS.
-//
-// POT values from this project's uploader are raw 32-byte Swarm references;
-// the bundle / account / block-events bytes themselves live at
-// `${beeUrl}/bytes/${ref}`. Keys follow the same encoding as
-// `packages/era/src/swarm-pot.ts`:
+// Uses the pure-TS `@fullcircle/pot` compat layer — same API as the old WASM
+// runtime, no `<script src="/pot-web.js">` load, no `pot.wasm` fetch. Keys
+// follow the same encoding as `packages/era/src/swarm-pot.ts`:
 //   byNumber        key = block number as a JS number (POT serialises to 8-byte BE IEEE-754)
 //   byHash          key = 32-byte raw block hash
 //   byTx            key = 32-byte raw tx hash
@@ -16,62 +10,27 @@
 //   byBalanceBlock  key = block number as a JS number
 
 import { browser } from '$app/environment'
+import { createPotCompat, type PotGlobalCompat, type PotKvsCompat } from '@fullcircle/pot'
 
-interface PotKvs {
-  getRaw(key: number | Uint8Array, timeoutMs?: number): Promise<Uint8Array>
-}
+let runtimePromise: Promise<PotGlobalCompat> | null = null
 
-interface PotGlobal {
-  ready(): Promise<PotGlobal>
-  load(ref: string, beeUrl?: string, batchId?: string, timeoutMs?: number): Promise<PotKvs>
-}
-
-declare global {
-  var pot: PotGlobal | undefined
-}
-
-let runtimePromise: Promise<PotGlobal> | null = null
-
-function loadRuntime(): Promise<PotGlobal> {
+function loadRuntime(): Promise<PotGlobalCompat> {
   if (!browser) return Promise.reject(new Error('POT runtime is browser-only'))
   if (runtimePromise) return runtimePromise
-  runtimePromise = new Promise<PotGlobal>((resolve, reject) => {
-    if (globalThis.pot?.ready) {
-      globalThis.pot
-        .ready()
-        .then(() => resolve(globalThis.pot as PotGlobal))
-        .catch(reject)
-      return
-    }
-    const script = document.createElement('script')
-    script.src = '/pot-web.js'
-    script.setAttribute('wasm', '/pot.wasm')
-    script.async = true
-    script.onload = () => {
-      if (!globalThis.pot) {
-        reject(new Error('pot global was not set after /pot-web.js loaded'))
-        return
-      }
-      globalThis.pot
-        .ready()
-        .then(() => resolve(globalThis.pot as PotGlobal))
-        .catch(reject)
-    }
-    script.onerror = () => reject(new Error('failed to load /pot-web.js'))
-    document.head.appendChild(script)
-  })
+  const pot = createPotCompat()
+  runtimePromise = pot.ready()
   return runtimePromise
 }
 
 // One-KVS-per-ref cache. `pot.load` re-hydrates from Swarm, so repeating it
 // per lookup would be wasteful; keys are the root refs themselves.
-const kvsCache = new Map<string, Promise<PotKvs>>()
+const kvsCache = new Map<string, Promise<PotKvsCompat>>()
 
 function cacheKey(ref: string, beeUrl: string): string {
   return `${beeUrl}\x00${ref}`
 }
 
-async function loadKvs(ref: string, beeUrl: string): Promise<PotKvs> {
+async function loadKvs(ref: string, beeUrl: string): Promise<PotKvsCompat> {
   const key = cacheKey(ref, beeUrl)
   const existing = kvsCache.get(key)
   if (existing) return existing

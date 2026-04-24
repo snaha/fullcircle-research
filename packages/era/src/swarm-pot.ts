@@ -31,13 +31,10 @@
 // we track counters during `addBlocksToPot` and rely on the caller to load
 // previous stats when extending.
 
-import { createRequire } from 'node:module'
-import { webcrypto } from 'node:crypto'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { Bee } from '@ethersphere/bee-js'
+import { installPotCompat } from '@fullcircle/pot'
 import { encodeBlockBundle } from './bundle.js'
 
 // `PotKvs` comes from ./pot.d.ts, which declares the global `pot` plus a
@@ -47,28 +44,11 @@ type PotKvs = ReturnType<typeof globalThis.pot.new> extends Promise<infer T> ? T
 
 // ---------- One-time POT runtime load ----------
 
-// pot-node.js is CommonJS and attaches `pot` to globalThis on require. The
-// auto-init fires if `pot.wasm` is next to pot-node.js — which is the case in
-// vendor/pot/.
 let readyPromise: Promise<void> | null = null
 
 function loadPotRuntime(): Promise<void> {
   if (readyPromise) return readyPromise
-  // Node 18 doesn't expose globalThis.crypto without --experimental-global-webcrypto;
-  // pot-node.js throws at top level if it's missing. Safe to set on Node 19+ too.
-  if (!(globalThis as { crypto?: unknown }).crypto) {
-    ;(globalThis as { crypto?: unknown }).crypto = webcrypto
-  }
-  // pot-node.js reads `global.potVerbosity` at init and defaults to a chatty
-  // level that prints slot/loader lines for every KVS operation. Mute it
-  // before require so the CLI output stays useful; override with
-  // FULLCIRCLE_POT_VERBOSITY when debugging the runtime.
-  const verbosity = process.env.FULLCIRCLE_POT_VERBOSITY
-  ;(globalThis as { potVerbosity?: number }).potVerbosity = verbosity ? Number(verbosity) : 0
-  const here = dirname(fileURLToPath(import.meta.url))
-  const potNodePath = resolve(here, '../vendor/pot/pot-node.js')
-  const req = createRequire(import.meta.url)
-  req(potNodePath)
+  installPotCompat()
   readyPromise = globalThis.pot.ready().then(() => undefined)
   return readyPromise
 }
