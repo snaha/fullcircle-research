@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 export interface LoadSaver {
   load(reference: Uint8Array): Promise<Uint8Array>
   save(data: Uint8Array): Promise<Uint8Array>
@@ -53,7 +51,10 @@ export class InmemLoadSaver implements LoadSaver {
   }
 
   async save(data: Uint8Array): Promise<Uint8Array> {
-    const ref = new Uint8Array(createHash('sha256').update(data).digest())
+    // Cast via unknown: `lib.dom.d.ts` BufferSource before TS 5.7 doesn't
+    // recognise `Uint8Array<ArrayBufferLike>`, but node/browser subtle accepts it.
+    const digest = await crypto.subtle.digest('SHA-256', data as unknown as ArrayBuffer)
+    const ref = new Uint8Array(digest)
     this.store.set(toHex(ref), data)
     return ref
   }
