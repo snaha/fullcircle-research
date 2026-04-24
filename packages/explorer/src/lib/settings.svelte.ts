@@ -40,7 +40,6 @@ const KEY_POT_BY_ADDRESS = 'fullcircle.explorer.pot.byAddress'
 const KEY_POT_BY_BALANCE_BLOCK = 'fullcircle.explorer.pot.byBalanceBlock'
 const KEY_POT_META = 'fullcircle.explorer.pot.meta'
 const KEY_SQLITE_DB_REF = 'fullcircle.explorer.sqlite.dbRef'
-const KEY_SQLITE_META = 'fullcircle.explorer.sqlite.meta'
 
 const DEFAULT_BEE = __BUILD_BEE_URL__
 const HEX64 = /^[0-9a-f]{64}$/
@@ -79,7 +78,6 @@ export const settings = $state({
   potByBalanceBlock: load(KEY_POT_BY_BALANCE_BLOCK, ''),
   potMeta: load(KEY_POT_META, ''),
   sqliteDbRef: load(KEY_SQLITE_DB_REF, __BUILD_SQLITE__),
-  sqliteMeta: load(KEY_SQLITE_META, ''),
 })
 
 export interface SaveArgs {
@@ -95,7 +93,6 @@ export interface SaveArgs {
   potByBalanceBlock: string
   potMeta: string
   sqliteDbRef: string
-  sqliteMeta: string
 }
 
 export function saveSettings(args: SaveArgs): void {
@@ -111,7 +108,6 @@ export function saveSettings(args: SaveArgs): void {
   settings.potByBalanceBlock = normHex(args.potByBalanceBlock)
   settings.potMeta = normHex(args.potMeta)
   settings.sqliteDbRef = normHex(args.sqliteDbRef)
-  settings.sqliteMeta = normHex(args.sqliteMeta)
   if (browser) {
     localStorage.setItem(KEY_BEE, settings.beeUrl)
     localStorage.setItem(KEY_USE_FEED, String(settings.useFeed))
@@ -125,7 +121,9 @@ export function saveSettings(args: SaveArgs): void {
     localStorage.setItem(KEY_POT_BY_BALANCE_BLOCK, settings.potByBalanceBlock)
     localStorage.setItem(KEY_POT_META, settings.potMeta)
     localStorage.setItem(KEY_SQLITE_DB_REF, settings.sqliteDbRef)
-    localStorage.setItem(KEY_SQLITE_META, settings.sqliteMeta)
+    // Clean up any value written by older builds that carried a separate
+    // sqliteMeta ref — the meta now lives inside the DB itself.
+    localStorage.removeItem('fullcircle.explorer.sqlite.meta')
   }
 }
 
@@ -223,6 +221,7 @@ export function hasTxIndex(): boolean {
 /** True when address → balance lookup is available. */
 export function hasAddressIndex(): boolean {
   if (settings.source === 'manifest') return isHex64(settings.manifestRef)
+  if (settings.source === 'sqlite') return isHex64(settings.sqliteDbRef)
   if (settings.source === 'pot') {
     return isHex64(settings.potByAddress) && settings.potByAddress !== ZERO_REF
   }

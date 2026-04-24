@@ -11,7 +11,6 @@
     hasSource,
     hydratePotFromEnvelope,
     isAddress,
-    isHex64,
     resolveActiveSourceFromFeed,
     saveSettings,
     settings,
@@ -38,7 +37,6 @@
   let envelopeBusy = $state(false)
   let envelopeError = $state('')
   let sqliteDbRefInput = $state(settings.sqliteDbRef)
-  let sqliteMetaInput = $state(settings.sqliteMeta)
   let settingsOpen = $state(!hasSource())
   let resolving = $state(false)
   let resolveError = $state('')
@@ -61,7 +59,6 @@
     potByBalanceBlockInput = settings.potByBalanceBlock
     potMetaInput = settings.potMeta
     sqliteDbRefInput = settings.sqliteDbRef
-    sqliteMetaInput = settings.sqliteMeta
   })
 
   let hasPublisher = $derived(isAddress(publisherInput.trim().toLowerCase().replace(/^0x/, '')))
@@ -73,10 +70,6 @@
     }
     return 'https://etherscan.io'
   })
-
-  function normHex(s: string): string {
-    return s.trim().toLowerCase().replace(/^0x/, '')
-  }
 
   async function submitSettings(e: SubmitEvent) {
     e.preventDefault()
@@ -94,7 +87,6 @@
       potByBalanceBlock: potByBalanceBlockInput,
       potMeta: potMetaInput,
       sqliteDbRef: sqliteDbRefInput,
-      sqliteMeta: sqliteMetaInput,
     })
 
     // When use feed is on and a publisher is configured, always re-resolve.
@@ -110,7 +102,6 @@
         potByBalanceBlockInput = settings.potByBalanceBlock
         potMetaInput = settings.potMeta
         sqliteDbRefInput = settings.sqliteDbRef
-        sqliteMetaInput = settings.sqliteMeta
       } catch (err) {
         resolveError = (err as Error).message
         resolving = false
@@ -328,7 +319,9 @@
           <div class="flex flex-col gap-2">
             <Label for="manifest-ref">
               Manifest reference
-              {#if useFeedInput}<span class="text-muted-foreground">(read-only — resolved from feed)</span>{/if}
+              {#if useFeedInput}<span class="text-muted-foreground"
+                  >(read-only — resolved from feed)</span
+                >{/if}
             </Label>
             <Input
               id="manifest-ref"
@@ -344,7 +337,8 @@
           <div class="flex flex-col gap-3 rounded-md border p-3">
             {#if !useFeedInput}
               <p class="text-xs text-muted-foreground">
-                Paste the database ref printed by <code class="font-mono">pnpm era:upload-sqlite</code
+                Paste the database ref printed by <code class="font-mono"
+                  >pnpm era:upload-sqlite</code
                 >
                 (or read from <code class="font-mono">eras-*.sqlite-index.json</code>).
               </p>
@@ -352,7 +346,9 @@
             <div class="flex flex-col gap-2">
               <Label for="sqlite-db-ref">
                 dbRef
-                {#if useFeedInput}<span class="text-muted-foreground">(read-only — resolved from feed)</span>{/if}
+                {#if useFeedInput}<span class="text-muted-foreground"
+                    >(read-only — resolved from feed)</span
+                  >{/if}
               </Label>
               <Input
                 id="sqlite-db-ref"
@@ -364,22 +360,10 @@
                 disabled={useFeedInput}
               />
             </div>
-            <div class="flex flex-col gap-2">
-              <Label for="sqlite-meta">
-                meta <span class="text-muted-foreground">(optional)</span>
-              </Label>
-              <Input
-                id="sqlite-meta"
-                type="text"
-                bind:value={sqliteMetaInput}
-                placeholder="64-character hex"
-                spellcheck="false"
-                class="font-mono"
-                disabled={useFeedInput}
-              />
-            </div>
             <p class="text-xs text-muted-foreground">
-              Queries use HTTP Range requests to fetch only the needed database pages.
+              Queries use HTTP Range requests to fetch only the needed database pages. Aggregate
+              counts (block / tx / account totals) come from a <code class="font-mono">meta</code> table
+              inside the DB — no separate ref needed.
             </p>
           </div>
         {:else}
@@ -420,7 +404,9 @@
             <div class="flex flex-col gap-2">
               <Label for="pot-by-number">
                 byNumber
-                {#if useFeedInput}<span class="text-muted-foreground">(read-only — resolved from feed)</span>{/if}
+                {#if useFeedInput}<span class="text-muted-foreground"
+                    >(read-only — resolved from feed)</span
+                  >{/if}
               </Label>
               <Input
                 id="pot-by-number"
@@ -435,7 +421,9 @@
             <div class="flex flex-col gap-2">
               <Label for="pot-by-hash">
                 byHash
-                {#if useFeedInput}<span class="text-muted-foreground">(read-only — resolved from feed)</span>{/if}
+                {#if useFeedInput}<span class="text-muted-foreground"
+                    >(read-only — resolved from feed)</span
+                  >{/if}
               </Label>
               <Input
                 id="pot-by-hash"

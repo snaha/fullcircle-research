@@ -39,6 +39,7 @@
     void settings.manifestRef
     void settings.potByNumber
     void settings.potMeta
+    void settings.sqliteDbRef
     if (!hasSource()) {
       meta = null
       latest = []
@@ -100,16 +101,13 @@
             <dt class="text-muted-foreground">Bee gateway</dt>
             <dd class="font-mono break-all">{settings.beeUrl}</dd>
             <dt class="text-muted-foreground">Source</dt>
-            <dd class="font-mono">
-              {#if settings.source === 'manifest'}
-                manifest
-              {:else}
-                pot
-              {/if}
-            </dd>
+            <dd class="font-mono">{settings.source}</dd>
             {#if settings.source === 'manifest'}
               <dt class="text-muted-foreground">Manifest</dt>
               <dd class="font-mono break-all">{settings.manifestRef}</dd>
+            {:else if settings.source === 'sqlite'}
+              <dt class="text-muted-foreground">dbRef</dt>
+              <dd class="font-mono break-all">{settings.sqliteDbRef}</dd>
             {:else}
               <dt class="text-muted-foreground">byNumber</dt>
               <dd class="font-mono break-all">{settings.potByNumber}</dd>

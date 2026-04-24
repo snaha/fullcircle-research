@@ -112,3 +112,30 @@ describe('compat pot global object shape', () => {
     expect(() => pot.purge()).not.toThrow()
   })
 })
+
+describe('compat empty-KVS sentinel (matches WASM _save / _load)', () => {
+  const ZERO_REF = '0'.repeat(64)
+
+  it('save() on an empty KVS returns 32-byte zero reference', async () => {
+    // fetch is never called — save short-circuits when size === 0.
+    const pot = createPotCompat({
+      fetch: (async () => {
+        throw new Error('fetch should not be called')
+      }) as unknown as typeof fetch,
+    })
+    const kvs = await pot.new('http://bee.local:1633', ZERO_REF)
+    await expect(kvs.save()).resolves.toBe(ZERO_REF)
+    kvs.close()
+  })
+
+  it('load() with zero reference yields a fresh empty KVS, no fetch', async () => {
+    const pot = createPotCompat({
+      fetch: (async () => {
+        throw new Error('fetch should not be called')
+      }) as unknown as typeof fetch,
+    })
+    const kvs = await pot.load(ZERO_REF, 'http://bee.local:1633', ZERO_REF)
+    await expect(kvs.save()).resolves.toBe(ZERO_REF)
+    kvs.close()
+  })
+})

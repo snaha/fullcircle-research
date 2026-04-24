@@ -46,6 +46,11 @@ const TAG_NUMBER = 2
 const TAG_STRING = 3
 const TAG_BYTES = 4
 
+// The WASM runtime uses a 32-byte zero reference to represent "no content" —
+// `kvs.save()` on an empty pot returns it, and `pot.load(ref)` with it creates
+// a fresh empty KVS instead of fetching. See potjs.go _save / _load.
+const ZERO_REF_HEX = '0'.repeat(64)
+
 export function coerceKey(k: CompatKey): Uint8Array {
   let raw: Uint8Array
   if (typeof k === 'number') {
@@ -157,6 +162,10 @@ class PotKvsCompatImpl implements PotKvsCompat {
   }
 
   async save(): Promise<string> {
+    // Matches the WASM surface: an empty KVS returns a 32-byte zero reference
+    // rather than erroring. The underlying Index.save() throws on empty
+    // (spec-faithful to Go) — the translation lives here, on the compat seam.
+    if (this.idx.size() === 0) return ZERO_REF_HEX
     const ref = await this.idx.save()
     return toHex(ref)
   }
@@ -181,6 +190,11 @@ export function createPotCompat(options: PotCompatOptions = {}): PotGlobalCompat
       return new PotKvsCompatImpl(Index.create(mode))
     },
     async load(ref: string, beeUrl: string, batchId: string): Promise<PotKvsCompat> {
+      // WASM parity: a 32-byte zero reference means "no persisted content" —
+      // return a fresh empty KVS instead of trying to fetch from Bee.
+      if (ref.toLowerCase().replace(/^0x/, '') === ZERO_REF_HEX) {
+        return self.new(beeUrl, batchId)
+      }
       const ls = new BeeLoadSaver({ beeUrl, postageBatchId: batchId, fetch: options.fetch })
       const mode = makeMode(ls)
       const idx = await Index.fromReference(mode, fromHex(ref))

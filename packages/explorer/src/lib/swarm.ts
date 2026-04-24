@@ -24,6 +24,8 @@ import {
 import { getBundleRef, type PotIndex } from './pot'
 import { settings } from './settings.svelte'
 import {
+  getAccountRef,
+  getMeta,
   getRefByNumber,
   getRefByHash,
   getRefByTxHash,
@@ -92,10 +94,10 @@ export async function fetchMeta(): Promise<SourceMeta> {
       return parseMeta(await res.json(), empty)
     }
     if (settings.source === 'sqlite') {
-      if (!/^[0-9a-f]{64}$/.test(settings.sqliteMeta)) return empty
-      const res = await fetch(`${settings.beeUrl}/bytes/${settings.sqliteMeta}`)
-      if (!res.ok) return empty
-      return parseMeta(await res.json(), empty)
+      // Meta is a table inside the DB, read via sql.js-httpvfs Range requests.
+      if (!/^[0-9a-f]{64}$/.test(settings.sqliteDbRef)) return empty
+      const meta = await getMeta({ beeUrl: settings.beeUrl, dbRef: settings.sqliteDbRef })
+      return meta ?? empty
     }
     // POT source
     if (!/^[0-9a-f]{64}$/.test(settings.potMeta)) return empty
@@ -262,8 +264,9 @@ export async function probeIndex(index: Index, key: string): Promise<boolean> {
 
 /**
  * Fetch the per-address account record (final balance + full event log).
- * Served from the Mantaray `address/` sub-manifest or the POT `byAddress`
- * KVS. SQLite has no address index today, so this throws for SQLite sources.
+ * Served from the Mantaray `address/` sub-manifest, the POT `byAddress` KVS,
+ * or the SQLite `accounts` table (all three resolve to a JSON chunk at
+ * `/bytes/{ref}`).
  */
 export async function fetchAccount(addr: string): Promise<AccountRecord> {
   const normalized = addr.toLowerCase().replace(/^0x/, '')
@@ -300,5 +303,15 @@ export async function fetchAccount(addr: string): Promise<AccountRecord> {
     return (await res.json()) as AccountRecord
   }
 
-  throw new Error('Address lookup is not available on SQLite sources yet.')
+  // sqlite
+  const ref = await getAccountRef(normalized, {
+    beeUrl: settings.beeUrl,
+    dbRef: settings.sqliteDbRef,
+  })
+  if (!ref) throw new Error(`address not indexed: 0x${normalized}`)
+  const res = await fetch(`${settings.beeUrl}/bytes/${ref}`)
+  if (!res.ok) {
+    throw new Error(`bee ${res.status} ${res.statusText}: /bytes/${ref}`)
+  }
+  return (await res.json()) as AccountRecord
 }

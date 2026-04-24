@@ -38,6 +38,9 @@ Numbers → 8-byte BE IEEE-754, strings → UTF-8, `Uint8Array` ≤ 32 bytes; al
 **6. `new` in TS interfaces needs property syntax.**
 `interface Foo { new(): Bar }` reads as a construct signature; `new: (...) => Bar` is the method. The WASM `pot.d.ts` already used the second form — I hit the first-form pitfall and copied the second.
 
+**7. Empty-KVS save/load needs a WASM-specific sentinel.**
+Go's `Index.Save` throws `root node is nil` when the pot has no entries. The WASM wrapper catches that and returns 32 zero bytes; on `load(ref)` with all-zeros it creates a fresh KVS instead of fetching. Era relies on this — era 0 has no transactions, so `byTx.save()` hits the empty case. The core [Index](src/index.ts) stays spec-faithful (throws); the translation lives on the [compat seam](src/compat.ts), matching `potjs.go _save` and `_load`.
+
 ## Status vs the WASM it replaces
 
 Proven compatible, both directions, against a live Bee:

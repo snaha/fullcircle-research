@@ -25,7 +25,7 @@
       return
     }
     if (!hasAddressIndex()) {
-      error = 'Address lookup requires a Mantaray manifest source (POT has no address index yet).'
+      error = 'Address lookup is not available for the current source.'
       return
     }
     loading = true
