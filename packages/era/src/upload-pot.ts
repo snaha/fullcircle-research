@@ -5,41 +5,53 @@
 // (byNumber / byHash / byTx / meta) and upload stats.
 //
 // Usage:
-//   pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [range]
+//   pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [--chunks | --ws] [range]
 //   pnpm era:upload-pot --batch-id abc123... 0..6
 //   pnpm era:upload-pot --batch-id abc123... --refs data/eras-0.pot.json 1
 //   pnpm era:upload-pot --bee-url http://bee.example.com --batch-id abc123... 5
+//   pnpm era:upload-pot --batch-id abc123... --chunks 11   # HTTP /chunks (client-chunked)
+//   pnpm era:upload-pot --batch-id abc123... --ws 11       # WebSocket /chunks/stream
 
 import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Bee } from '@ethersphere/bee-js'
 import { DATA_DIR, header, resolveTargets, type Target } from './cli-shared.js'
+import { uploadBundleAsTree, type ChunkUploader } from './swarm-chunk.js'
 import {
   addBlocksToPot,
   getPotBlockRange,
   openPotIndexes,
   savePotIndexes,
   writePotBlockRangeMeta,
+  type BundleUploader,
   type PotIndexRefs,
 } from './swarm-pot.js'
+import { BeeChunkStream } from './swarm-ws.js'
 
 // ---------- Parse arguments ----------
+
+type UploadMode = 'bytes' | 'chunks' | 'ws'
 
 interface CliArgs {
   beeUrl?: string
   batchId?: string
   refsPath?: string
   target?: string
+  uploadMode: UploadMode
+  useTag: boolean
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const result: CliArgs = {}
+  const result: CliArgs = { uploadMode: 'bytes', useTag: true }
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--bee-url' && argv[i + 1]) result.beeUrl = argv[++i]
     else if (arg === '--batch-id' && argv[i + 1]) result.batchId = argv[++i]
     else if (arg === '--refs' && argv[i + 1]) result.refsPath = argv[++i]
+    else if (arg === '--chunks') result.uploadMode = 'chunks'
+    else if (arg === '--ws') result.uploadMode = 'ws'
+    else if (arg === '--no-tag') result.useTag = false
     else if (!arg.startsWith('--')) result.target = arg
   }
   return result
@@ -104,18 +116,72 @@ if (!args.batchId) {
   console.error('error: --batch-id is required')
   console.error('')
   console.error('Usage:')
-  console.error('  pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [range]')
+  console.error(
+    '  pnpm era:upload-pot --batch-id <postage-batch-id> [--refs <pot-json>] [--chunks | --ws] [range]',
+  )
+  console.error('')
+  console.error('Upload mode (for block bundles — POT chunks still go via the WASM runtime):')
+  console.error('  default     HTTP POST /bytes — Bee chunks and BMT-hashes on the server side')
+  console.error(
+    '  --chunks    HTTP POST /chunks — client pre-chunks + BMT-hashes, one HTTP / chunk',
+  )
+  console.error(
+    '  --ws        WebSocket /chunks/stream — same as --chunks but pipelined on one socket',
+  )
   console.error('')
   console.error('Examples:')
   console.error('  pnpm era:upload-pot --batch-id abc123... 0')
   console.error('  pnpm era:upload-pot --batch-id abc123... --refs data/eras-0.pot.json 1')
   console.error('  pnpm era:upload-pot --bee-url http://bee.example.com --batch-id abc123... 5')
+  console.error('  pnpm era:upload-pot --batch-id abc123... --chunks 11')
+  console.error('  pnpm era:upload-pot --batch-id abc123... --ws 11')
   process.exit(1)
 }
 
 const batchId = args.batchId
 const beeUrl = args.beeUrl ?? 'http://localhost:1633'
 const bee = new Bee(beeUrl)
+
+// ---------- Upload mode wiring ----------
+
+// A tag is how Bee scores "upload fully pushed to network". bee-js docs note
+// that posting chunks without a tag against a node with no peers can hang;
+// the --no-tag flag opts out for debugging / fully-isolated setups.
+const tagUid: number | undefined =
+  args.uploadMode !== 'bytes' && args.useTag ? (await bee.createTag()).uid : undefined
+if (tagUid !== undefined) console.log(`created tag ${tagUid}`)
+
+let chunkStream: BeeChunkStream | undefined
+if (args.uploadMode === 'ws') {
+  chunkStream = new BeeChunkStream({ beeUrl, batchId, tag: tagUid })
+  await timed('open ws /chunks/stream', () => chunkStream!.open())
+}
+
+// Concrete `uploadChunk` for the two client-chunked modes. Left undefined for
+// the default /bytes path, which takes a different code path entirely.
+const uploadChunk: ChunkUploader | undefined =
+  args.uploadMode === 'chunks'
+    ? async (chunkData: Uint8Array, _address: Uint8Array) => {
+        await bee.uploadChunk(
+          batchId,
+          chunkData,
+          tagUid !== undefined ? { tag: tagUid } : undefined,
+        )
+      }
+    : args.uploadMode === 'ws'
+      ? async (chunkData: Uint8Array, address: Uint8Array) => {
+          await chunkStream!.sendChunkData(chunkData, address)
+        }
+      : undefined
+
+// Wraps `uploadBundleAsTree` so `addBlocksToPot` sees the same signature it
+// always has: bundle bytes in → 32-byte Swarm ref out. The tree-builder
+// handles the ≤4KB (single leaf) and >4KB (fan-out) cases uniformly.
+const bundleUploader: BundleUploader | undefined = uploadChunk
+  ? (bytes) => uploadBundleAsTree(bytes, uploadChunk)
+  : undefined
+
+console.log(`upload mode: ${args.uploadMode}${tagUid !== undefined ? ` (tag=${tagUid})` : ''}`)
 
 const targets = await resolveTargets(args.target)
 const uploadable: Target[] = []
@@ -159,6 +225,7 @@ for (const t of uploadable) {
   const started = Date.now()
   const res = await addBlocksToPot(bee, indexes, t.blocksPath, {
     batchId,
+    bundleUploader,
     onProgress: (msg) => console.log(`       ${msg}`),
   })
   totals.blocksUploaded += res.blocksUploaded
@@ -180,6 +247,10 @@ console.log(`       byNumber: ${indexRefs.byNumber}`)
 console.log(`       byHash:   ${indexRefs.byHash}`)
 console.log(`       byTx:     ${indexRefs.byTx}`)
 console.log(`       meta:     ${indexRefs.meta ?? '(none)'}`)
+
+if (chunkStream) {
+  await timed('close ws /chunks/stream', () => chunkStream!.close())
+}
 
 if (meta) {
   console.log(`after:  firstBlock=${meta.firstBlock} lastBlock=${meta.lastBlock}`)

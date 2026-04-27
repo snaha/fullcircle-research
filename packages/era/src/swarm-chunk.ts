@@ -9,21 +9,25 @@ import { keccak_256 } from '@noble/hashes/sha3'
 
 export const SPAN_SIZE = 8
 export const MAX_PAYLOAD_SIZE = 4096
+// Number of 32-byte references that fit in one intermediate chunk payload
+// (4096 / 32 = 128). Equivalently: branching factor of the Swarm chunk tree.
+export const REFS_PER_CHUNK = MAX_PAYLOAD_SIZE / 32
 const SEGMENT_SIZE = 32
 const SEGMENT_PAIR_SIZE = 2 * SEGMENT_SIZE
 const HASH_SIZE = 32
 
 /**
- * Encode a length as an 8-byte little-endian span. Swarm caps spans at 2^32-1
- * to sidestep BigInt interop issues at the JS boundary.
+ * Encode a length as an 8-byte little-endian span. Accepts a bigint to cover
+ * intermediate chunks whose cumulative span can exceed uint32 on large
+ * payloads; leaves pass a plain number and it's widened transparently.
  */
-export function makeSpan(length: number): Uint8Array {
-  if (length <= 0 || length > 0xffffffff) {
+export function makeSpan(length: number | bigint): Uint8Array {
+  const big = typeof length === 'bigint' ? length : BigInt(length)
+  if (big <= 0n || big > 0xffffffffffffffffn) {
     throw new Error(`invalid span length ${length}`)
   }
   const span = new Uint8Array(SPAN_SIZE)
-  const view = new DataView(span.buffer)
-  view.setUint32(0, length, true)
+  new DataView(span.buffer).setBigUint64(0, big, true)
   return span
 }
 
@@ -67,15 +71,85 @@ export interface Chunk {
 
 /**
  * Build a content-addressed chunk for a ≤4096-byte payload. Throws for larger
- * payloads — callers that may exceed the limit must chunk locally or fall back
- * to the HTTP `/bytes` endpoint.
+ * payloads — callers that may exceed the limit must use `uploadBundleAsTree`
+ * (which chunks locally) or fall back to the HTTP `/bytes` endpoint.
+ *
+ * The span defaults to payload.length (what you want for leaf chunks). For
+ * intermediate chunks that fan out to children, pass the cumulative span of
+ * the subtree — otherwise Bee will reject the chunk on retrieve or yield
+ * wrong byte offsets for range requests.
  */
-export function makeChunk(payload: Uint8Array): Chunk {
+export function makeChunk(payload: Uint8Array, span?: number | bigint): Chunk {
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_SIZE) {
     throw new Error(`payload size ${payload.length} outside [1, ${MAX_PAYLOAD_SIZE}]`)
   }
   const data = new Uint8Array(SPAN_SIZE + payload.length)
-  data.set(makeSpan(payload.length), 0)
+  data.set(makeSpan(span ?? payload.length), 0)
   data.set(payload, SPAN_SIZE)
   return { data, address: bmtHash(data) }
+}
+
+/**
+ * Signature for an uploader that knows how to push one content-addressed chunk
+ * to Swarm. Implementations: (a) `bee.uploadChunk` over HTTP `/chunks`, (b)
+ * `BeeChunkStream.sendChunkData` over WebSocket `/chunks/stream`. The caller
+ * supplies both `chunkData` (span||payload) and the precomputed `address`;
+ * the uploader is responsible only for pushing bytes and awaiting ack.
+ */
+export type ChunkUploader = (chunkData: Uint8Array, address: Uint8Array) => Promise<void>
+
+/**
+ * Split a payload into a Swarm content-addressed chunk tree, upload every
+ * chunk via `uploadChunk`, and return the root's 32-byte address.
+ *
+ * Layout mirrors what Bee's `/bytes` endpoint produces internally:
+ *   - leaves: up to ⌈len/4096⌉ chunks of raw payload, span = chunk length
+ *   - intermediates: fan-out of 128 × 32-byte refs per chunk, span = sum of
+ *     descendants' spans
+ *   - root: last intermediate (or the sole leaf for payloads ≤4096 bytes)
+ *
+ * Returns the root address so callers can use it anywhere they'd previously
+ * use `bee.uploadData()`'s returned reference.
+ */
+export async function uploadBundleAsTree(
+  payload: Uint8Array,
+  uploadChunk: ChunkUploader,
+): Promise<Uint8Array> {
+  if (payload.length === 0) {
+    throw new Error('uploadBundleAsTree: payload is empty')
+  }
+
+  // Leaves: carve the payload into ≤4KB pages, span = page length.
+  const leaves: Chunk[] = []
+  for (let off = 0; off < payload.length; off += MAX_PAYLOAD_SIZE) {
+    const page = payload.subarray(off, Math.min(off + MAX_PAYLOAD_SIZE, payload.length))
+    leaves.push(makeChunk(page))
+  }
+  for (const c of leaves) await uploadChunk(c.data, c.address)
+
+  // Fan-in: each intermediate packs up to 128 child refs and carries the sum
+  // of children's spans. Repeat until one node remains — that's the root.
+  let level: Chunk[] = leaves
+  while (level.length > 1) {
+    const next: Chunk[] = []
+    for (let i = 0; i < level.length; i += REFS_PER_CHUNK) {
+      const batch = level.slice(i, Math.min(i + REFS_PER_CHUNK, level.length))
+      const refPayload = new Uint8Array(batch.length * 32)
+      let totalSpan = 0n
+      for (let j = 0; j < batch.length; j++) {
+        refPayload.set(batch[j].address, j * 32)
+        totalSpan += readSpan(batch[j].data)
+      }
+      const parent = makeChunk(refPayload, totalSpan)
+      next.push(parent)
+    }
+    for (const c of next) await uploadChunk(c.data, c.address)
+    level = next
+  }
+
+  return level[0].address
+}
+
+function readSpan(chunkData: Uint8Array): bigint {
+  return new DataView(chunkData.buffer, chunkData.byteOffset, SPAN_SIZE).getBigUint64(0, true)
 }

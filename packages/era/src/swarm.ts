@@ -241,6 +241,14 @@ export async function openManifest(
  * (number, hash, tx) into the three sub-manifests. Nothing is saved to Swarm
  * here beyond the block bundles themselves — call `saveManifest` once per run.
  */
+/**
+ * Bundle uploader callback: bytes in, 32-byte Swarm ref out. Default behaviour
+ * is `bee.uploadData` (`POST /bytes`). Callers can swap in a `/chunks`- or
+ * `/chunks/stream`-based uploader (see `uploadBundleAsTree` in swarm-chunk.ts)
+ * without any changes in this module.
+ */
+export type BundleUploader = (bundleBytes: Uint8Array) => Promise<Uint8Array>
+
 export async function addBlocksToManifest(
   bee: Bee,
   manifest: Manifest,
@@ -248,6 +256,8 @@ export async function addBlocksToManifest(
   options: {
     batchId: string
     onProgress?: (msg: string) => void
+    /** Replace the per-block bundle upload path. Omit to use `bee.uploadData`. */
+    bundleUploader?: BundleUploader
     /**
      * Persist the manifest to Swarm after every N blocks. Only dirty nodes
      * are re-uploaded each time (Mantaray tracks this internally), so this
@@ -260,6 +270,12 @@ export async function addBlocksToManifest(
   },
 ): Promise<AddBlocksResult> {
   const log = options.onProgress ?? console.log
+  const uploadBundle: BundleUploader =
+    options.bundleUploader ??
+    (async (bytes) => {
+      const { reference } = await bee.uploadData(options.batchId, bytes)
+      return hexToBytes(reference)
+    })
   let blocksUploaded = 0
   let txHashesIndexed = 0
 
@@ -278,8 +294,7 @@ export async function addBlocksToManifest(
       rawReceipts: hexToBytes(block.rawReceipts),
       totalDifficulty: block.totalDifficulty === null ? null : BigInt(block.totalDifficulty),
     })
-    const uploadResult = await bee.uploadData(options.batchId, bundleBytes)
-    const ref = hexToBytes(uploadResult.reference) as Reference
+    const ref = (await uploadBundle(bundleBytes)) as Reference
     const leafMeta = { 'Content-Type': 'application/octet-stream' }
 
     manifest.numberManifest.addFork(textEncoder.encode(block.number), ref, leafMeta)
@@ -770,13 +785,15 @@ function makeUploadFn(
   chunkStream: BeeChunkStream | undefined,
   cacheEnabled: boolean,
 ): (data: Uint8Array) => Promise<Reference> {
-  const rawHttpUpload = async (data: Uint8Array) => {
-    const result = await bee.uploadData(batchId, data)
+  const rawHttpUpload = async (data: Uint8Array): Promise<Reference> => {
+    const result = await uploadDataWithRetry(bee, batchId, data)
     return hexToBytes(result.reference) as Reference
   }
   // Manifest nodes are almost always ≤4 KB (one chunk). The rare fatter node
   // spills into a Swarm tree whose root ref we can only get from /bytes —
-  // fall back to HTTP just for those.
+  // fall back to HTTP just for those. The chunk-stream side has no retry:
+  // a WS failure tears down the pipeline, so recovering a single in-flight
+  // chunk without reopening the socket isn't meaningful.
   const rawUpload = chunkStream
     ? async (data: Uint8Array) => {
         if (data.length <= MAX_PAYLOAD_SIZE) {
@@ -787,6 +804,64 @@ function makeUploadFn(
       }
     : rawHttpUpload
   return cacheEnabled ? makeCachedSaver(rawUpload) : rawUpload
+}
+
+// ---------- Upload retry ----------
+//
+// A local Bee (or the dev-proxy in front of one) will transiently refuse
+// /bytes requests when it's overloaded — connections reset mid-request,
+// sockets hang, the proxy returns 502 "bad gateway". bee-js propagates
+// these straight up as BeeResponseError. Retrying is safe because
+// uploads are content-addressed (same bytes ⇒ same ref).
+
+const RETRYABLE_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'EAI_AGAIN'])
+const MAX_UPLOAD_RETRIES = 5
+
+// bee-js wraps axios errors in BeeResponseError but doesn't re-export the
+// class, so we shape-match instead of instanceof.
+function isTransientUploadError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const e = err as { code?: string; status?: number; statusText?: string; message?: string }
+  if (e.code && RETRYABLE_CODES.has(e.code)) return true
+  if (e.statusText && RETRYABLE_CODES.has(e.statusText)) return true
+  if (typeof e.status === 'number' && (e.status === 429 || (e.status >= 500 && e.status < 600)))
+    return true
+  if (e.message && /socket hang up|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE/i.test(e.message))
+    return true
+  return false
+}
+
+function describeErr(err: unknown): string {
+  if (!err || typeof err !== 'object') return String(err)
+  const e = err as { code?: string; status?: number; statusText?: string; message?: string }
+  const parts = [e.message ?? 'unknown']
+  if (e.code) parts.push(`code=${e.code}`)
+  if (e.status) parts.push(`status=${e.status}`)
+  if (e.statusText && e.statusText !== e.code) parts.push(`statusText=${e.statusText}`)
+  return parts.join(' ')
+}
+
+async function uploadDataWithRetry(
+  bee: Bee,
+  batchId: string,
+  data: Uint8Array,
+): Promise<{ reference: string }> {
+  let attempt = 0
+  for (;;) {
+    try {
+      return await bee.uploadData(batchId, data)
+    } catch (err) {
+      attempt++
+      if (attempt > MAX_UPLOAD_RETRIES || !isTransientUploadError(err)) throw err
+      // Exponential backoff w/ jitter: 200, 400, 800, 1600, 3200 ms (±25%)
+      const base = 200 * 2 ** (attempt - 1)
+      const delay = base + base * (Math.random() * 0.5 - 0.25)
+      console.warn(
+        `/bytes retry ${attempt}/${MAX_UPLOAD_RETRIES} after ${Math.round(delay)}ms: ${describeErr(err)}`,
+      )
+      await new Promise((r) => setTimeout(r, delay))
+    }
+  }
 }
 
 /**

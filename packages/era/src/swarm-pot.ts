@@ -127,6 +127,22 @@ export interface OpenPotIndexesOptions {
   onProgress?: (msg: string) => void
 }
 
+/**
+ * Abstracts "upload one block bundle and give me its 32-byte Swarm ref".
+ * Default implementation goes through `bee.uploadData` (HTTP `/bytes`); the
+ * CLI can plug in a `/chunks`-based uploader (HTTP or WebSocket) to bypass
+ * Bee's internal chunker.
+ */
+export type BundleUploader = (bundleBytes: Uint8Array) => Promise<Uint8Array>
+
+export interface AddBlocksOptions {
+  batchId: string
+  onProgress?: (msg: string) => void
+  // If provided, replaces the default `bee.uploadData` path for per-block
+  // bundles. Used by --chunks / --ws modes in upload-pot.
+  bundleUploader?: BundleUploader
+}
+
 // ---------- Public functions ----------
 
 /**
@@ -217,9 +233,15 @@ export async function addBlocksToPot(
   bee: Bee,
   indexes: PotIndexes,
   blocksPath: string,
-  options: { batchId: string; onProgress?: (msg: string) => void },
+  options: AddBlocksOptions,
 ): Promise<AddBlocksResult> {
   const log = options.onProgress ?? console.log
+  const uploadBundle: BundleUploader =
+    options.bundleUploader ??
+    (async (bytes) => {
+      const { reference } = await bee.uploadData(options.batchId, bytes)
+      return hexToBytes(reference)
+    })
   let blocksUploaded = 0
   let txHashesIndexed = 0
 
@@ -230,8 +252,7 @@ export async function addBlocksToPot(
       rawReceipts: hexToBytes(block.rawReceipts),
       totalDifficulty: block.totalDifficulty === null ? null : BigInt(block.totalDifficulty),
     })
-    const uploadResult = await bee.uploadData(options.batchId, bundleBytes)
-    const refBytes = hexToBytes(uploadResult.reference)
+    const refBytes = await uploadBundle(bundleBytes)
 
     const numberKey = Number(block.number)
     if (!Number.isSafeInteger(numberKey)) {

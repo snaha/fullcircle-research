@@ -18,10 +18,14 @@ import {
   openManifest,
   saveManifest,
   writeBlockRangeMeta,
+  type BundleUploader,
 } from './swarm.js'
+import { uploadBundleAsTree, type ChunkUploader } from './swarm-chunk.js'
 import { BeeChunkStream } from './swarm-ws.js'
 
 // ---------- Parse arguments ----------
+
+type BundleMode = 'bytes' | 'chunks' | 'ws-bundles'
 
 interface Args {
   beeUrl?: string
@@ -29,7 +33,14 @@ interface Args {
   manifestHash?: string
   target?: string
   cacheManifest: boolean
+  /** Open a WebSocket stream and use it for Mantaray manifest chunks. */
   ws: boolean
+  /**
+   * How per-block bundles get uploaded. Independent from `ws` (which only
+   * affects manifest chunks). `ws-bundles` reuses the same stream `ws` opens.
+   */
+  bundleMode: BundleMode
+  useTag: boolean
   /** Save the manifest every N blocks; undefined = save only at the end. */
   saveEvery?: number
   /** Skip uploading per-address/per-block balance events even when extracted. */
@@ -37,7 +48,13 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const result: Args = { cacheManifest: true, ws: false, noState: false }
+  const result: Args = {
+    cacheManifest: true,
+    ws: false,
+    bundleMode: 'bytes',
+    useTag: true,
+    noState: false,
+  }
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
@@ -50,7 +67,17 @@ function parseArgs(argv: string[]): Args {
     } else if (arg === '--no-manifest-cache') {
       result.cacheManifest = false
     } else if (arg === '--ws') {
+      // --ws alone: manifest chunks via WS, bundles via /bytes (legacy default).
       result.ws = true
+    } else if (arg === '--chunks') {
+      // Bundles via HTTP /chunks (client pre-chunks + BMT hashes, N HTTP per bundle).
+      result.bundleMode = 'chunks'
+    } else if (arg === '--ws-bundles') {
+      // Bundles via WebSocket /chunks/stream; implies --ws.
+      result.bundleMode = 'ws-bundles'
+      result.ws = true
+    } else if (arg === '--no-tag') {
+      result.useTag = false
     } else if (arg === '--no-state') {
       result.noState = true
     } else if (arg === '--per-block') {
@@ -77,7 +104,18 @@ if (!args.batchId) {
   console.error('')
   console.error('Usage:')
   console.error(
-    '  pnpm era:upload --batch-id <postage-batch-id> [--manifest <hash>] [--no-manifest-cache] [--ws] [range]',
+    '  pnpm era:upload --batch-id <postage-batch-id> [--manifest <hash>] [--no-manifest-cache] [--ws] [--chunks | --ws-bundles] [range]',
+  )
+  console.error('')
+  console.error(
+    'Block-bundle upload mode (independent from --ws, which only affects manifest chunks):',
+  )
+  console.error('  default        HTTP POST /bytes — Bee chunks and BMT-hashes on the server')
+  console.error(
+    '  --chunks       HTTP POST /chunks — client pre-chunks + BMT-hashes, N HTTP per bundle',
+  )
+  console.error(
+    '  --ws-bundles   WebSocket /chunks/stream — pipelined on one socket (implies --ws)',
   )
   console.error('')
   console.error('Examples:')
@@ -86,7 +124,11 @@ if (!args.batchId) {
   console.error('  pnpm era:upload --bee-url http://bee.example.com --batch-id abc123... 5')
   console.error('  pnpm era:upload --batch-id abc123... --no-manifest-cache 1')
   console.error(
-    '  pnpm era:upload --batch-id abc123... --ws 0   # stream manifest chunks over /chunks/stream',
+    '  pnpm era:upload --batch-id abc123... --ws 0          # manifest chunks over /chunks/stream',
+  )
+  console.error('  pnpm era:upload --batch-id abc123... --chunks 0      # bundles via HTTP /chunks')
+  console.error(
+    '  pnpm era:upload --batch-id abc123... --ws-bundles 0  # bundles + manifest over the same WS',
   )
   console.error(
     '  pnpm era:upload --batch-id abc123... --per-block 2992       # checkpoint manifest after every block',
@@ -179,13 +221,48 @@ if (args.saveEvery !== undefined && args.saveEvery <= 10) {
   )
 }
 
+// A tag is how Bee scores "upload fully pushed to network". bee-js docs note
+// that posting chunks without a tag against a node with no peers can hang;
+// `--no-tag` opts out. Only the client-chunked paths need a tag — `/bytes`
+// already manages one server-side.
+const tagUid: number | undefined =
+  args.bundleMode !== 'bytes' && args.useTag ? (await bee.createTag()).uid : undefined
+if (tagUid !== undefined) console.log(`created tag ${tagUid}`)
+
 // If checkpointing is enabled, open the ws chunk stream (if requested) up
 // front so intermediate saves also get to use it.
 let chunkStream: BeeChunkStream | undefined
 if (args.ws) {
-  chunkStream = new BeeChunkStream({ beeUrl, batchId })
+  chunkStream = new BeeChunkStream({ beeUrl, batchId, tag: tagUid })
   await timed('open ws /chunks/stream', () => chunkStream!.open())
 }
+
+// Per-block bundle uploader. The default (`undefined`) keeps swarm.ts on the
+// `bee.uploadData` path it has always used; `--chunks` and `--ws-bundles`
+// route bundles through `uploadBundleAsTree` instead, splitting bundles
+// >4 KB into a Swarm chunk tree client-side.
+const bundleChunkUploader: ChunkUploader | undefined =
+  args.bundleMode === 'chunks'
+    ? async (chunkData: Uint8Array, _address: Uint8Array) => {
+        await bee.uploadChunk(
+          batchId,
+          chunkData,
+          tagUid !== undefined ? { tag: tagUid } : undefined,
+        )
+      }
+    : args.bundleMode === 'ws-bundles'
+      ? async (chunkData: Uint8Array, address: Uint8Array) => {
+          await chunkStream!.sendChunkData(chunkData, address)
+        }
+      : undefined
+
+const bundleUploader: BundleUploader | undefined = bundleChunkUploader
+  ? (bytes) => uploadBundleAsTree(bytes, bundleChunkUploader)
+  : undefined
+
+console.log(
+  `bundle upload mode: ${args.bundleMode}` + (tagUid !== undefined ? ` (tag=${tagUid})` : ''),
+)
 
 async function saveManifestNow(label: string, writeTreeSnapshot: boolean) {
   return saveManifest(bee, manifest, {
@@ -242,6 +319,7 @@ for (const t of uploadable) {
 
   const res = await addBlocksToManifest(bee, manifest, t.blocksPath, {
     batchId,
+    bundleUploader,
     onProgress: (msg) => console.log(`       ${msg}`),
     checkpoint,
   })
