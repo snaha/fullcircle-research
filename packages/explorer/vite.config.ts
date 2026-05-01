@@ -14,10 +14,12 @@ export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
   define: {
     __BUILD_PUBLISHER__: JSON.stringify(latestRefs.publisher ?? ''),
-    __BUILD_MANIFEST__: JSON.stringify(latestRefs.manifest ?? ''),
+    __BUILD_MANIFEST__: JSON.stringify(
+      latestRefs.manifest ?? 'ea118fe090ef12bb5b40b75539687a79a38f6122e15402640688f2c8d435ad03',
+    ),
     __BUILD_POT__: JSON.stringify(latestRefs.pot ?? ''),
     __BUILD_SQLITE__: JSON.stringify(latestRefs.sqlite ?? ''),
-    __BUILD_BEE_URL__: JSON.stringify(process.env.FULLCIRCLE_BEE_URL ?? 'http://localhost:1633'),
+    __BUILD_BEE_URL__: JSON.stringify(process.env.FULLCIRCLE_BEE_URL ?? 'https://api.gateway.ethswarm.org'),
   },
   server: {
     port: 5318,
