@@ -59,10 +59,10 @@ function loadSource(): Source {
 }
 
 function loadUseFeed(): boolean {
-  if (!browser) return true
+  if (!browser) return false
   const stored = localStorage.getItem(KEY_USE_FEED)
-  // Default to true (use feed) when not previously set
-  return stored === null ? true : stored === 'true'
+  // Default to false (use the baked-in ref) when not previously set
+  return stored === null ? false : stored === 'true'
 }
 
 export const settings = $state({
