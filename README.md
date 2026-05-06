@@ -4,7 +4,7 @@ Research + tooling for storing Ethereum execution-layer history on [Swarm](https
 [swarm-accelerator#5](https://github.com/ethersphere/swarm-accelerator/issues/5).
 
 Research documents live in [docs/](./docs):
-[RESEARCH](./docs/RESEARCH.md) · [PROPOSAL](./docs/PROPOSAL.md) · [INCENTIVIZATION](./docs/INCENTIVIZATION.md).
+[PIPELINE](./docs/PIPELINE.md) · [RESEARCH](./docs/RESEARCH.md) · [PROPOSAL](./docs/PROPOSAL.md) · [INCENTIVIZATION](./docs/INCENTIVIZATION.md).
 
 ## Layout
 
@@ -43,11 +43,11 @@ and optional Portal Network proofs ([spec](https://hackmd.io/pIZlxnitSciV5wUgW6W
 [`packages/era/src/erae.ts`](./packages/era/src/erae.ts) exposes
 three pure functions:
 
-| function | signature | notes |
-|---|---|---|
-| `fetchEraeFile` | `(url, init?) => Promise<Uint8Array>` | Plain `fetch` wrapper; throws on non-2xx. |
-| `parseEraeFile` | `(bytes) => EraeFile` | Reads records, decompresses snappy-framed header/body/receipts, computes block hashes and tx hashes (legacy + EIP-2718). |
-| `buildEraeIndex` | `(file) => EraeIndex` | Builds `byNumber`, `byBlockHash`, `byTxHash` lookup maps. |
+| function         | signature                             | notes                                                                                                                    |
+| ---------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `fetchEraeFile`  | `(url, init?) => Promise<Uint8Array>` | Plain `fetch` wrapper; throws on non-2xx.                                                                                |
+| `parseEraeFile`  | `(bytes) => EraeFile`                 | Reads records, decompresses snappy-framed header/body/receipts, computes block hashes and tx hashes (legacy + EIP-2718). |
+| `buildEraeIndex` | `(file) => EraeIndex`                 | Builds `byNumber`, `byBlockHash`, `byTxHash` lookup maps.                                                                |
 
 Each `EraeBlock` keeps its raw RLP bytes (header/body/receipts) alongside the
 decoded number, block hash, per-tx hashes, and (pre-merge only) total difficulty.
@@ -69,11 +69,11 @@ pnpm era:download-and-process 7     # both, one pass
 
 Every script accepts the same single argument:
 
-| form | meaning |
-|---|---|
-| *(omitted)* | eras 0..6 (default) |
-| `42` | single era 42 |
-| `0..99` | inclusive range of eras |
+| form                             | meaning                                           |
+| -------------------------------- | ------------------------------------------------- |
+| _(omitted)_                      | eras 0..6 (default)                               |
+| `42`                             | single era 42                                     |
+| `0..99`                          | inclusive range of eras                           |
 | `https://…/mainnet-NNNNN-….erae` | explicit file URL (bypasses the checksums lookup) |
 
 Ranges process eras strictly in order, sequentially — no parallelism yet. That
@@ -105,12 +105,12 @@ last-block hash (self-checking against the file's contents).
 
 Per era you get four files:
 
-| file | contents |
-|---|---|
-| `mainnet-NNNNN-<hash>.erae` | raw download from ethPandaOps |
-| `mainnet-NNNNN-<hash>.summary.json` | one-object overview (see below) |
-| `mainnet-NNNNN-<hash>.blocks.ndjson` | one JSON record per block (see below) |
-| `mainnet-NNNNN-<hash>.index.ndjson` | interleaved `block` + `tx` lookup records (see below) |
+| file                                 | contents                                              |
+| ------------------------------------ | ----------------------------------------------------- |
+| `mainnet-NNNNN-<hash>.erae`          | raw download from ethPandaOps                         |
+| `mainnet-NNNNN-<hash>.summary.json`  | one-object overview (see below)                       |
+| `mainnet-NNNNN-<hash>.blocks.ndjson` | one JSON record per block (see below)                 |
+| `mainnet-NNNNN-<hash>.index.ndjson`  | interleaved `block` + `tx` lookup records (see below) |
 
 All numeric fields that can exceed `Number.MAX_SAFE_INTEGER` (block numbers,
 total difficulty) are serialised as **decimal strings** so they round-trip
@@ -123,26 +123,26 @@ file?" probe without touching the big NDJSONs.
 
 ```json
 {
-  "sourceUrl":        "https://data.ethpandaops.io/erae/mainnet/mainnet-00007-fbd10bce.erae",
-  "version":          "0x3265",
-  "startingBlock":    "57344",
-  "blockCount":       8192,
-  "accumulatorRoot":  "0xd9bc682b…",
-  "firstBlock":       { "number": "57344", "hash": "0x523f5beb…", "txCount": 0 },
-  "lastBlock":        { "number": "65535", "hash": "0xfbd10bce…", "txCount": 0 },
-  "totalTxs":         2676
+  "sourceUrl": "https://data.ethpandaops.io/erae/mainnet/mainnet-00007-fbd10bce.erae",
+  "version": "0x3265",
+  "startingBlock": "57344",
+  "blockCount": 8192,
+  "accumulatorRoot": "0xd9bc682b…",
+  "firstBlock": { "number": "57344", "hash": "0x523f5beb…", "txCount": 0 },
+  "lastBlock": { "number": "65535", "hash": "0xfbd10bce…", "txCount": 0 },
+  "totalTxs": 2676
 }
 ```
 
-| field | type | notes |
-|---|---|---|
-| `sourceUrl` | string | upstream URL the `.erae` was fetched from |
-| `version` | hex string | erae format magic (`0x3265`) |
-| `startingBlock` | decimal string | first block number, from the `BlockIndex` trailer |
-| `blockCount` | number | always `8192` for complete eras |
-| `accumulatorRoot` | `0x…` hex or `null` | HTR of HeaderRecords — pre-merge only, `null` post-merge |
-| `firstBlock`, `lastBlock` | object | `{ number, hash, txCount }` for the bookends |
-| `totalTxs` | number | sum of `txCount` across all 8192 blocks |
+| field                     | type                | notes                                                    |
+| ------------------------- | ------------------- | -------------------------------------------------------- |
+| `sourceUrl`               | string              | upstream URL the `.erae` was fetched from                |
+| `version`                 | hex string          | erae format magic (`0x3265`)                             |
+| `startingBlock`           | decimal string      | first block number, from the `BlockIndex` trailer        |
+| `blockCount`              | number              | always `8192` for complete eras                          |
+| `accumulatorRoot`         | `0x…` hex or `null` | HTR of HeaderRecords — pre-merge only, `null` post-merge |
+| `firstBlock`, `lastBlock` | object              | `{ number, hash, txCount }` for the bookends             |
+| `totalTxs`                | number              | sum of `txCount` across all 8192 blocks                  |
 
 #### `…blocks.ndjson`
 
@@ -151,27 +151,27 @@ block-number order. Each line is a standalone JSON object:
 
 ```jsonc
 {
-  "number":          "60343",                                 // decimal string
-  "hash":            "0x60b9fec9…",                           // keccak256(rawHeader)
-  "totalDifficulty": "65229745891189391",                     // decimal string or null (post-merge)
-  "txHashes":        ["0xbc77efd4…"],                         // keccak256 per tx, block order
-  "rawHeader":       "0xf90219a02…",                          // RLP-encoded header bytes
-  "rawBody":         "0xf87cf879…",                           // RLP-encoded [txs, uncles, withdrawals?]
-  "rawReceipts":     "0xe7e680a0…",                           // RLP-encoded slim receipts (erae variant)
-  "proof":           null                                      // optional Portal Network proof
+  "number": "60343", // decimal string
+  "hash": "0x60b9fec9…", // keccak256(rawHeader)
+  "totalDifficulty": "65229745891189391", // decimal string or null (post-merge)
+  "txHashes": ["0xbc77efd4…"], // keccak256 per tx, block order
+  "rawHeader": "0xf90219a02…", // RLP-encoded header bytes
+  "rawBody": "0xf87cf879…", // RLP-encoded [txs, uncles, withdrawals?]
+  "rawReceipts": "0xe7e680a0…", // RLP-encoded slim receipts (erae variant)
+  "proof": null, // optional Portal Network proof
 }
 ```
 
-| field | type | notes |
-|---|---|---|
-| `number` | decimal string | block number |
-| `hash` | `0x…` hex (32 bytes) | canonical block hash, equal to `keccak256(rawHeader)` |
-| `totalDifficulty` | decimal string or `null` | cumulative PoW difficulty; `null` post-merge |
-| `txHashes` | `string[]` | per-tx `keccak256` hashes in block order; `[]` for empty blocks |
-| `rawHeader` | `0x…` hex | RLP-encoded header — the bytes that hash to `hash` |
-| `rawBody` | `0x…` hex | RLP-encoded `[transactions, uncles, withdrawals?]` |
-| `rawReceipts` | `0x…` hex | RLP-encoded *slim* receipts (no bloom filters — erae variant) |
-| `proof` | `0x…` hex or `null` | optional Portal Network historical-proof blob |
+| field             | type                     | notes                                                           |
+| ----------------- | ------------------------ | --------------------------------------------------------------- |
+| `number`          | decimal string           | block number                                                    |
+| `hash`            | `0x…` hex (32 bytes)     | canonical block hash, equal to `keccak256(rawHeader)`           |
+| `totalDifficulty` | decimal string or `null` | cumulative PoW difficulty; `null` post-merge                    |
+| `txHashes`        | `string[]`               | per-tx `keccak256` hashes in block order; `[]` for empty blocks |
+| `rawHeader`       | `0x…` hex                | RLP-encoded header — the bytes that hash to `hash`              |
+| `rawBody`         | `0x…` hex                | RLP-encoded `[transactions, uncles, withdrawals?]`              |
+| `rawReceipts`     | `0x…` hex                | RLP-encoded _slim_ receipts (no bloom filters — erae variant)   |
+| `proof`           | `0x…` hex or `null`      | optional Portal Network historical-proof blob                   |
 
 The `raw*` fields are the exact decompressed record payloads from the erae
 file, ready to feed into any RLP decoder (ethers, viem, ethereumjs) when
@@ -194,20 +194,20 @@ order. A block record is followed immediately by its transaction records:
 
 Block record:
 
-| field | type | notes |
-|---|---|---|
-| `kind` | `"block"` | record-type discriminator |
-| `number` | decimal string | block number |
-| `hash` | `0x…` hex | block hash |
+| field    | type           | notes                     |
+| -------- | -------------- | ------------------------- |
+| `kind`   | `"block"`      | record-type discriminator |
+| `number` | decimal string | block number              |
+| `hash`   | `0x…` hex      | block hash                |
 
 Transaction record:
 
-| field | type | notes |
-|---|---|---|
-| `kind` | `"tx"` | record-type discriminator |
-| `hash` | `0x…` hex | transaction hash |
-| `blockNumber` | decimal string | block this tx is in |
-| `txIndex` | number | 0-based position within the block |
+| field         | type           | notes                             |
+| ------------- | -------------- | --------------------------------- |
+| `kind`        | `"tx"`         | record-type discriminator         |
+| `hash`        | `0x…` hex      | transaction hash                  |
+| `blockNumber` | decimal string | block this tx is in               |
+| `txIndex`     | number         | 0-based position within the block |
 
 Total record count per full era: `8192 + totalTxs`. A consumer scans the
 file once to build `byNumber` / `byBlockHash` / `byTxHash` lookup maps
@@ -218,11 +218,11 @@ isn't stored). The shape is append-friendly on purpose — when an RPC tail
 
 ### Ballpark sizes (per era)
 
-| artefact | pre-tx eras (0–4) | early-tx eras (5–6) |
-|---|---|---|
-| `.erae` | ~3.7 MiB | ~4.0–4.4 MiB |
-| `.blocks.ndjson` | ~11 MiB | ~11.3–12.5 MiB |
-| `.index.ndjson` | ~880 KiB | ~1.0–1.3 MiB |
+| artefact         | pre-tx eras (0–4) | early-tx eras (5–6) |
+| ---------------- | ----------------- | ------------------- |
+| `.erae`          | ~3.7 MiB          | ~4.0–4.4 MiB        |
+| `.blocks.ndjson` | ~11 MiB           | ~11.3–12.5 MiB      |
+| `.index.ndjson`  | ~880 KiB          | ~1.0–1.3 MiB        |
 
 Eras 0–4 contain zero transactions: the first mainnet transaction was block
 46,147 (in era 5). That's a real chain property, not a parser bug.
