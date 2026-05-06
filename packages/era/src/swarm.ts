@@ -16,21 +16,34 @@
 // stays identical — `GET /bzz/<root>/number/123` and
 // `GET /bzz/<root>/address/<hex>` both resolve — but the build path is
 // independent trees that can be saved in parallel.
+//
+// Each sub-manifest is wrapped in `StreamingMantaray` from
+// `@fullcircle/mantaray-stream`, which lazy-loads only the spine touched by
+// each `addFork` instead of hydrating the whole tree up front. Adding to an
+// existing manifest of billions of entries is therefore O(spine) per
+// insert, not O(tree).
 
 import { createReadStream } from 'node:fs'
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { Bee } from '@ethersphere/bee-js'
-import MantarayJs from 'mantaray-js'
+import {
+  MantarayFork,
+  MantarayNode,
+  StreamingMantaray,
+  Utils,
+  saveTree,
+  type MantarayNodeInstance,
+  type StorageHandler,
+  type StorageLoader,
+  type StorageSaver,
+} from '@fullcircle/mantaray-stream'
 import { encodeBlockBundle } from './bundle.js'
 import { DATA_DIR } from './cli-shared.js'
 import { MAX_PAYLOAD_SIZE } from './swarm-chunk.js'
 import type { BeeChunkStream } from './swarm-ws.js'
 
-const { MantarayNode, MantarayFork, Utils, loadAllNodes } = MantarayJs
-
-// Reference type from mantaray-js (can't import from CJS module)
 type Reference = Uint8Array & { length: 32 | 64 }
 
 // ---------- Public types ----------
@@ -71,9 +84,9 @@ export interface ManifestMeta {
   firstBlock: string
   lastBlock: string
   blockCount: string
-  txCount: string
   /** Total balance events uploaded. 0 when the manifest carries no state. */
   eventCount: string
+  txCount: string
   /**
    * Addresses that have had an account record written. Cumulative across
    * upload runs — can overcount when the same address appears in multiple
@@ -90,8 +103,6 @@ export interface UploadOptions {
   manifestHash?: string // existing root manifest to extend
 }
 
-type MantarayNodeInstance = InstanceType<typeof MantarayJs.MantarayNode>
-
 interface ManifestStats {
   firstBlock: bigint | null
   lastBlock: bigint | null
@@ -103,15 +114,15 @@ interface ManifestStats {
 
 export interface Manifest {
   /** Sub-manifest keyed by `<blockNumber>`. */
-  numberManifest: MantarayNodeInstance
+  numberManifest: StreamingMantaray
   /** Sub-manifest keyed by `<blockHash>` (lowercase hex, no 0x prefix). */
-  hashManifest: MantarayNodeInstance
+  hashManifest: StreamingMantaray
   /** Sub-manifest keyed by `<txHash>` (lowercase hex, no 0x prefix). */
-  txManifest: MantarayNodeInstance
+  txManifest: StreamingMantaray
   /** Sub-manifest keyed by `<addressHex>` (lowercase hex, no 0x prefix). */
-  addressManifest: MantarayNodeInstance
+  addressManifest: StreamingMantaray
   /** Sub-manifest keyed by `<blockNumber>` — balance-mutation events at that block. */
-  balanceBlockManifest: MantarayNodeInstance
+  balanceBlockManifest: StreamingMantaray
   /** Running counters — serialised by `writeBlockRangeMeta`. */
   stats: ManifestStats
   /** Swarm ref of the last-written meta chunk; stitched into root at save. */
@@ -148,9 +159,13 @@ export async function* readBlocksNdjson(path: string): AsyncGenerator<BlockRecor
 }
 
 /**
- * Create a fresh `Manifest` (three empty sub-manifests) or load an existing
- * root manifest and extract its `number/`, `hash/`, `tx/` sub-manifests plus
- * the `meta` ref if present.
+ * Create a fresh `Manifest` (five empty sub-manifests) or open an existing
+ * root manifest and extract its `number/`, `hash/`, `tx/`, `address/`,
+ * `balance-block/` sub-manifests plus the `meta` ref if present.
+ *
+ * Sub-manifests are wrapped in `StreamingMantaray`, so opening an existing
+ * billion-entry manifest only fetches the root chunk plus its immediate
+ * children — descendants stay lazy until a mutation walks past them.
  *
  * Use this together with `addBlocksToManifest` and `saveManifest` to upload
  * many blocks.ndjson files into one combined root manifest that is saved
@@ -165,63 +180,33 @@ export async function openManifest(
   },
 ): Promise<Manifest> {
   const log = options.onProgress ?? console.log
+  const cacheEnabled = options.cacheManifest !== false
+  const handler = makeStorageHandler(bee, '', cacheEnabled)
 
   if (!options.manifestHash) {
     return {
-      numberManifest: freshSubManifest(),
-      hashManifest: freshSubManifest(),
-      txManifest: freshSubManifest(),
-      addressManifest: freshSubManifest(),
-      balanceBlockManifest: freshSubManifest(),
+      numberManifest: freshSubManifest(handler),
+      hashManifest: freshSubManifest(handler),
+      txManifest: freshSubManifest(handler),
+      addressManifest: freshSubManifest(handler),
+      balanceBlockManifest: freshSubManifest(handler),
       stats: emptyStats(),
       metaRef: null,
     }
   }
 
   log(`loading existing manifest ${options.manifestHash}...`)
-  const cacheEnabled = options.cacheManifest !== false
   const rootHex = options.manifestHash.toLowerCase()
   const existingRef = hexToBytes(rootHex) as Reference
+
   const root = new MantarayNode()
+  await loadRootStub(root, existingRef, handler.loader)
 
-  // Fast path: a consolidated snapshot for this root exists on disk.
-  const snapshot = cacheEnabled ? await readSnapshot(rootHex) : null
-  if (snapshot) {
-    log(`snapshot hit: ${snapshot.size} chunks`)
-    const snapLoader = async (ref: Reference) => {
-      const refHex = bytesToHex(ref)
-      const hit = snapshot.get(refHex)
-      // Must return a fresh copy: mantaray-js's deserialize XOR-decrypts the
-      // buffer in place. Deduped subtrees share a contentAddress, so the same
-      // ref gets loaded more than once; reusing the Map's Uint8Array would
-      // corrupt subsequent deserializations ("Wrong mantaray version").
-      if (hit) return new Uint8Array(hit)
-      const cached = await readCachedChunk(refHex)
-      if (cached) return cached
-      return (await bee.downloadData(refHex)).toUint8Array()
-    }
-    await root.load(snapLoader, existingRef)
-    await loadAllNodes(snapLoader, root)
-  } else {
-    const counters = { hits: 0, misses: 0 }
-    const storageLoader = cacheEnabled
-      ? makeCachedLoader(bee, counters)
-      : async (ref: Reference) => (await bee.downloadData(bytesToHex(ref))).toUint8Array()
-    await root.load(storageLoader, existingRef)
-    // `load` only materializes the root node; descendants stay lazy. If we
-    // start adding forks without hydrating the tree, unloaded subtrees get
-    // dropped on save. Force-load everything before mutating.
-    await loadAllNodes(storageLoader, root)
-    if (cacheEnabled) {
-      log(`manifest cache: ${counters.hits} hits, ${counters.misses} misses`)
-    }
-  }
-
-  const numberManifest = extractSubManifest(root, 'number/')
-  const hashManifest = extractSubManifest(root, 'hash/')
-  const txManifest = extractSubManifest(root, 'tx/')
-  const addressManifest = extractSubManifest(root, 'address/')
-  const balanceBlockManifest = extractSubManifest(root, 'balance-block/')
+  const numberManifest = extractSubManifest(root, 'number/', handler)
+  const hashManifest = extractSubManifest(root, 'hash/', handler)
+  const txManifest = extractSubManifest(root, 'tx/', handler)
+  const addressManifest = extractSubManifest(root, 'address/', handler)
+  const balanceBlockManifest = extractSubManifest(root, 'balance-block/', handler)
   const metaRef = extractMetaRef(root)
   const stats = metaRef ? await loadStatsFromMeta(bee, metaRef) : emptyStats()
 
@@ -282,14 +267,14 @@ export async function addBlocksToManifest(
     const ref = uploadResult.reference.toUint8Array() as Reference
     const leafMeta = { 'Content-Type': 'application/octet-stream' }
 
-    manifest.numberManifest.addFork(textEncoder.encode(block.number), ref, leafMeta)
+    await manifest.numberManifest.addFork(textEncoder.encode(block.number), ref, leafMeta)
 
     const normalizedHash = block.hash.toLowerCase().replace(/^0x/, '')
-    manifest.hashManifest.addFork(textEncoder.encode(normalizedHash), ref, leafMeta)
+    await manifest.hashManifest.addFork(textEncoder.encode(normalizedHash), ref, leafMeta)
 
     for (const txHash of block.txHashes) {
       const normalizedTx = txHash.toLowerCase().replace(/^0x/, '')
-      manifest.txManifest.addFork(textEncoder.encode(normalizedTx), ref, leafMeta)
+      await manifest.txManifest.addFork(textEncoder.encode(normalizedTx), ref, leafMeta)
       txHashesIndexed++
     }
 
@@ -462,7 +447,7 @@ export async function addBalanceEventsToManifest(
       const { reference } = await bee.uploadData(options.batchId, bytes)
       const ref = reference.toUint8Array() as Reference
       const normalizedAddr = addr.toLowerCase().replace(/^0x/, '')
-      manifest.addressManifest.addFork(textEncoder.encode(normalizedAddr), ref, leafMeta)
+      await manifest.addressManifest.addFork(textEncoder.encode(normalizedAddr), ref, leafMeta)
     },
     (done, total) => log(`  accounts ${done}/${total}`),
   )
@@ -478,7 +463,7 @@ export async function addBalanceEventsToManifest(
       const bytes = textEncoder.encode(JSON.stringify(record))
       const { reference } = await bee.uploadData(options.batchId, bytes)
       const ref = reference.toUint8Array() as Reference
-      manifest.balanceBlockManifest.addFork(textEncoder.encode(blockStr), ref, leafMeta)
+      await manifest.balanceBlockManifest.addFork(textEncoder.encode(blockStr), ref, leafMeta)
     },
     (done, total) => log(`  blocks ${done}/${total}`),
   )
@@ -536,9 +521,10 @@ export async function writeBlockRangeMeta(
 /**
  * Persist the manifest to Swarm.
  *
- * Saves the three sub-manifests concurrently, then stitches a fresh root
- * manifest whose top-level forks are `number/`, `hash/`, `tx/` (plus `meta`
- * if present) and saves that too. Only dirty nodes are re-uploaded.
+ * Saves the five sub-manifests concurrently, then stitches a fresh root
+ * manifest whose top-level forks are `number/`, `hash/`, `tx/`, `address/`,
+ * `balance-block/` (plus `meta` if present) and saves that too. Only dirty
+ * nodes are re-uploaded.
  */
 export async function saveManifest(
   bee: Bee,
@@ -549,35 +535,25 @@ export async function saveManifest(
     onProgress?: (msg: string) => void
     cacheManifest?: boolean
     chunkStream?: BeeChunkStream
-    /**
-     * Rewrite the consolidated on-disk snapshot after saving. Walks every
-     * node in the tree to read their cached chunks, so it's expensive for
-     * big manifests — skip on intermediate checkpoints and only write on the
-     * final save of a run.
-     */
-    writeTreeSnapshot?: boolean
   },
 ): Promise<ManifestRefs> {
   const log = options.onProgress ?? console.log
   const cacheEnabled = options.cacheManifest !== false
   const concurrency = options.concurrency ?? 32
 
-  const upload = makeUploadFn(bee, options.batchId, options.chunkStream, cacheEnabled)
+  const saver = makeUploadFn(bee, options.batchId, options.chunkStream, cacheEnabled)
   const tracker = makeSaveProgressTracker(log)
 
-  const subSave = async (label: string, node: MantarayNodeInstance): Promise<Reference | null> => {
+  const subSave = async (label: string, sub: StreamingMantaray): Promise<Reference | null> => {
+    const node = sub.rootNode
     if (!hasAnyFork(node) && !node.getEntry) {
       log(`[${label}] empty sub-manifest — skipping save`)
       return null
     }
-    return saveMantarayTree(
-      node,
-      upload,
-      concurrency,
-      (msg) => log(`[${label}] ${msg}`),
-      tracker,
-      label,
-    )
+    const ref = await sub.save()
+    tracker.markSubDone(label)
+    log(`[${label}] tree saved: ${bytesToHex(ref)}`)
+    return ref
   }
 
   let numberRef: Reference | null
@@ -586,7 +562,6 @@ export async function saveManifest(
   let addressRef: Reference | null
   let balanceBlockRef: Reference | null
   let rootRef: Reference
-  const root = new MantarayNode()
   try {
     ;[numberRef, hashRef, txRef, addressRef, balanceBlockRef] = await Promise.all([
       subSave('number', manifest.numberManifest),
@@ -596,30 +571,25 @@ export async function saveManifest(
       subSave('balance-block', manifest.balanceBlockManifest),
     ])
 
-    // Stitch a fresh root with the clean sub-manifests as descendants.
-    // Since each sub-manifest's root has `contentAddress` set after save, our
-    // dirty-walk will upload only the new root chunk.
+    // Build a fresh root manifest with the (now-clean) sub-manifest roots
+    // mounted as forks. Each sub.rootNode has contentAddress set after save,
+    // so the iterative dirty-walk only re-uploads the new root chunk.
+    const root = new MantarayNode()
     root.setObfuscationKey = Utils.gen32Bytes()
     root.forks = {}
-    mountSubManifest(root, 'number/', manifest.numberManifest)
-    mountSubManifest(root, 'hash/', manifest.hashManifest)
-    mountSubManifest(root, 'tx/', manifest.txManifest)
-    mountSubManifest(root, 'address/', manifest.addressManifest)
-    mountSubManifest(root, 'balance-block/', manifest.balanceBlockManifest)
+    mountSubManifest(root, 'number/', manifest.numberManifest.rootNode)
+    mountSubManifest(root, 'hash/', manifest.hashManifest.rootNode)
+    mountSubManifest(root, 'tx/', manifest.txManifest.rootNode)
+    mountSubManifest(root, 'address/', manifest.addressManifest.rootNode)
+    mountSubManifest(root, 'balance-block/', manifest.balanceBlockManifest.rootNode)
     if (manifest.metaRef) {
       root.addFork(textEncoder.encode('meta'), manifest.metaRef, {
         'Content-Type': 'application/json',
       })
     }
 
-    rootRef = await saveMantarayTree(
-      root,
-      upload,
-      concurrency,
-      (msg) => log(`[root] ${msg}`),
-      tracker,
-      'root',
-    )
+    rootRef = await saveTree(root, { saver, concurrency })
+    log(`[root] tree saved: ${bytesToHex(rootRef)}`)
   } finally {
     tracker.stop()
   }
@@ -640,20 +610,6 @@ export async function saveManifest(
       ` address=${refs.addressManifest ?? '(empty)'} balance-block=${refs.balanceBlockManifest ?? '(empty)'}`,
   )
 
-  if (cacheEnabled && options.writeTreeSnapshot !== false) {
-    const snapStartedAt = Date.now()
-    try {
-      const chunks = await collectTreeChunks(root)
-      const bytes = await writeSnapshot(refs.root, chunks)
-      await pruneOldSnapshots(refs.root)
-      log(
-        `snapshot written: ${chunks.size} chunks, ${bytes} bytes (${Date.now() - snapStartedAt} ms)`,
-      )
-    } catch (err) {
-      log(`snapshot skipped: ${(err as Error).message}`)
-    }
-  }
-
   return refs
 }
 
@@ -673,49 +629,67 @@ function emptyStats(): ManifestStats {
   }
 }
 
-function freshSubManifest(): MantarayNodeInstance {
-  const node = new MantarayNode()
-  node.setObfuscationKey = Utils.gen32Bytes()
-  return node
+function freshSubManifest(handler: StorageHandler): StreamingMantaray {
+  return StreamingMantaray.create(handler)
+}
+
+// Minimal port of `loadAndStub` for use during root extraction. After this,
+// the root has its forks populated and each immediate child is stamped with
+// contentAddress so the subsequent extractSubManifest can hand them out as
+// clean StreamingMantaray instances.
+async function loadRootStub(
+  node: MantarayNodeInstance,
+  ref: Reference,
+  loader: StorageLoader,
+): Promise<void> {
+  await node.load(loader, ref)
+  if (!node.forks) return
+  for (const fork of Object.values(node.forks)) {
+    const childRef = fork.node.getEntry
+    if (childRef && !fork.node.getContentAddress) {
+      fork.node.setContentAddress = childRef
+    }
+  }
 }
 
 /**
- * Find the top-level fork whose prefix starts with `prefix` and return its
- * node as the sub-manifest. When the fork's prefix exactly matches `prefix`
- * (the normal case for a mature tree), we return `fork.node` directly so its
- * clean `contentAddress` is preserved. In the edge case of a longer prefix
- * (e.g. a single-entry sub-index where the trie didn't split at `prefix`),
- * we synthesize a fresh parent whose single fork carries the remainder.
- *
- * Returns an empty sub-manifest when the root has no matching fork.
+ * Extract a top-level fork as its own StreamingMantaray. When the fork's
+ * prefix exactly matches `prefix`, we hand out fork.node directly (its
+ * `contentAddress` is already set by `loadRootStub`). For the edge case of
+ * a longer combined prefix (single-entry sub-index where the trie didn't
+ * split at `prefix`), we synthesise a fresh parent whose single fork carries
+ * the remainder. Returns an empty sub-manifest when no matching fork exists.
  */
-function extractSubManifest(root: MantarayNodeInstance, prefix: string): MantarayNodeInstance {
+function extractSubManifest(
+  root: MantarayNodeInstance,
+  prefix: string,
+  handler: StorageHandler,
+): StreamingMantaray {
   const prefixBytes = textEncoder.encode(prefix)
   const fork = root.forks?.[prefixBytes[0]]
-  if (!fork) return freshSubManifest()
+  if (!fork) return freshSubManifest(handler)
 
   if (bytesEqual(fork.prefix, prefixBytes)) {
-    return fork.node
+    return StreamingMantaray.fromNode(fork.node, handler)
   }
 
   if (!bytesStartWith(fork.prefix, prefixBytes)) {
-    // Fork exists under the same first byte but diverges before `prefix` —
-    // nothing to extract for this index.
-    return freshSubManifest()
+    return freshSubManifest(handler)
   }
 
   const remainder = fork.prefix.slice(prefixBytes.length)
-  const sub = freshSubManifest()
-  sub.forks = {}
-  sub.forks[remainder[0]] = new MantarayFork(remainder, fork.node)
-  return sub
+  const synth = new MantarayNode()
+  synth.setObfuscationKey = Utils.gen32Bytes()
+  synth.forks = {}
+  synth.forks[remainder[0]] = new MantarayFork(remainder, fork.node)
+  return StreamingMantaray.fromNode(synth, handler)
 }
 
 function extractMetaRef(root: MantarayNodeInstance): Reference | null {
   const metaBytes = textEncoder.encode('meta')
   const fork = root.forks?.[metaBytes[0]]
   if (!fork || !bytesEqual(fork.prefix, metaBytes)) return null
-  return fork.node.getEntry ?? null
+  return (fork.node.getEntry ?? null) as Reference | null
 }
 
 function mountSubManifest(
@@ -764,12 +738,27 @@ async function loadStatsFromMeta(bee: Bee, metaRef: Reference): Promise<Manifest
   }
 }
 
+function makeStorageHandler(bee: Bee, batchId: string, cacheEnabled: boolean): StorageHandler {
+  const counters = { hits: 0, misses: 0 }
+  const loader: StorageLoader = cacheEnabled
+    ? makeCachedLoader(bee, counters)
+    : async (ref: Reference) => (await bee.downloadData(bytesToHex(ref))).toUint8Array()
+  // batchId may be empty when only reading; saver is unused in that case but
+  // still needs to satisfy the type. Caller passes a real batchId at save.
+  const rawSaver: StorageSaver = async (data: Uint8Array) => {
+    const result = await bee.uploadData(batchId, data)
+    return result.reference.toUint8Array() as Reference
+  }
+  const saver = cacheEnabled ? makeCachedSaver(rawSaver) : rawSaver
+  return { loader, saver }
+}
+
 function makeUploadFn(
   bee: Bee,
   batchId: string,
   chunkStream: BeeChunkStream | undefined,
   cacheEnabled: boolean,
-): (data: Uint8Array) => Promise<Reference> {
+): StorageSaver {
   const rawHttpUpload = async (data: Uint8Array) => {
     const result = await bee.uploadData(batchId, data)
     return result.reference.toUint8Array() as Reference
@@ -777,7 +766,7 @@ function makeUploadFn(
   // Manifest nodes are almost always ≤4 KB (one chunk). The rare fatter node
   // spills into a Swarm tree whose root ref we can only get from /bytes —
   // fall back to HTTP just for those.
-  const rawUpload = chunkStream
+  const rawUpload: StorageSaver = chunkStream
     ? async (data: Uint8Array) => {
         if (data.length <= MAX_PAYLOAD_SIZE) {
           const address = await chunkStream.uploadChunkPayload(data)
@@ -790,217 +779,28 @@ function makeUploadFn(
 }
 
 /**
- * Iterative dirty-walk save for a single Mantaray tree. Replaces mantaray-js's
- * built-in `save()`, which spawns a Promise per fork of every dirty node —
- * including clean forks that short-circuit. For a big tree that means
- * millions of Promise allocations before the first chunk ever flows; this
- * walker only allocates work for dirty nodes and enforces post-order via
- * child-count decrements.
- */
-async function saveMantarayTree(
-  root: MantarayNodeInstance,
-  upload: (data: Uint8Array) => Promise<Reference>,
-  concurrency: number,
-  log: (msg: string) => void,
-  tracker: SaveProgressTracker,
-  label: string,
-): Promise<Reference> {
-  const totalChunks = countMantarayNodes(root)
-  const saveStartedAt = Date.now()
-  let uploadedCount = 0
-  let dirtyCount = 0
-
-  const remaining = new Map<MantarayNodeInstance, number>()
-  const parents = new Map<MantarayNodeInstance, MantarayNodeInstance>()
-  const ready: MantarayNodeInstance[] = []
-  let readyHead = 0
-
-  // Phase 1: synchronously find every dirty node and record its dirty-child
-  // count. A clean node (contentAddress set) is a dead end — we don't descend
-  // into it and don't allocate anything for it. That's what keeps us out of
-  // the O(dirty × 256) Promise explosion.
-  ;(function walk(node: MantarayNodeInstance): void {
-    if (node.getContentAddress) return
-    let dirtyChildren = 0
-    if (node.forks) {
-      for (const fork of Object.values(node.forks)) {
-        const child = fork.node
-        if (child.getContentAddress) continue
-        dirtyChildren++
-        parents.set(child, node)
-        walk(child)
-      }
-    }
-    remaining.set(node, dirtyChildren)
-    dirtyCount++
-    if (dirtyChildren === 0) ready.push(node)
-  })(root)
-
-  const walkMs = Date.now() - saveStartedAt
-  log(`dirty nodes: ${dirtyCount} (tree=${totalChunks}, walk=${walkMs} ms)`)
-  tracker.addPlan(label, dirtyCount)
-
-  if (dirtyCount === 0) {
-    const existing = root.getContentAddress
-    if (!existing) throw new Error('saveMantarayTree: root is clean but has no contentAddress')
-    log(`tree saved: ${bytesToHex(existing)} (0 dirty / ${totalChunks} total chunks in 0 ms)`)
-    return existing
-  }
-
-  // Phase 2: drain the ready queue with bounded concurrency. When a node's
-  // upload completes, decrement its parent's remaining count; parent becomes
-  // ready when it hits 0. Post-order is enforced by this dependency.
-  let inFlight = 0
-  let rootRef: Reference | null = null
-
-  await new Promise<void>((resolveAll, rejectAll) => {
-    let failed = false
-
-    const startNext = (): void => {
-      while (!failed && inFlight < concurrency && readyHead < ready.length) {
-        const node = ready[readyHead++]
-        inFlight++
-        processNode(node).catch((err: unknown) => {
-          inFlight--
-          if (failed) return
-          failed = true
-          log(`  !! processNode rejected: ${(err as Error)?.message ?? String(err)}`)
-          rejectAll(err instanceof Error ? err : new Error(String(err)))
-        })
-      }
-      if (!failed && inFlight === 0 && readyHead >= ready.length) {
-        resolveAll()
-      }
-    }
-
-    const processNode = async (node: MantarayNodeInstance): Promise<void> => {
-      const data = node.serialize()
-      const ref = await upload(data)
-      node.setContentAddress = ref
-      if (node === root) rootRef = ref
-      uploadedCount++
-      tracker.markChunk(label)
-      const parent = parents.get(node)
-      if (parent) {
-        const rem = (remaining.get(parent) ?? 0) - 1
-        remaining.set(parent, rem)
-        if (rem === 0) ready.push(parent)
-      }
-      inFlight--
-      startNext()
-    }
-
-    startNext()
-  })
-
-  if (!rootRef) {
-    const addr = root.getContentAddress
-    if (!addr) throw new Error('saveMantarayTree: root was not uploaded')
-    rootRef = addr
-  }
-
-  const saveElapsed = Date.now() - saveStartedAt
-  log(
-    `tree saved: ${bytesToHex(rootRef)} (${uploadedCount} dirty / ${totalChunks} total chunks in ${saveElapsed} ms)`,
-  )
-
-  return rootRef
-}
-
-/**
- * Aggregates upload progress across parallel `saveMantarayTree` calls and
- * emits one combined log line throttled to every 500 ms (plus a 2 s
- * heartbeat when nothing else has printed). The chunks/s rate uses a
- * sliding window (`windowMs`, default 5 s) rather than since-start, so it
- * reflects current throughput even after a slow start.
+ * Tracks per-sub progress and emits a heartbeat every 2s during long saves.
  */
 interface SaveProgressTracker {
-  addPlan(label: string, dirty: number): void
-  markChunk(label: string): void
+  markSubDone(label: string): void
   stop(): void
 }
 
-function makeSaveProgressTracker(
-  log: (msg: string) => void,
-  windowMs = 5_000,
-): SaveProgressTracker {
-  const perLabel = new Map<string, { dirty: number; uploaded: number }>()
-  let totalDirty = 0
-  let totalUploaded = 0
-  let lastLoggedAt = 0
-  const samples: Array<{ t: number; uploaded: number }> = []
-  let head = 0
-
-  const rateOverWindow = (): number | null => {
-    if (samples.length - head < 2) return null
-    const first = samples[head]
-    const last = samples[samples.length - 1]
-    const dt = Math.max(1, last.t - first.t)
-    return ((last.uploaded - first.uploaded) / dt) * 1000
-  }
-
-  const formatPerLabel = (): string =>
-    Array.from(perLabel.entries())
-      .map(([l, v]) => `${l}=${v.uploaded}/${v.dirty}`)
-      .join(' ')
-
-  const emit = (now: number): void => {
-    const rate = rateOverWindow()
-    const rateStr =
-      rate !== null ? `${rate.toFixed(0)} chunks/s over ${windowMs / 1000}s` : 'warming up'
-    log(`uploaded ${totalUploaded}/${totalDirty} (${rateStr}) — ${formatPerLabel()}`)
-    lastLoggedAt = now
-  }
-
+function makeSaveProgressTracker(log: (msg: string) => void): SaveProgressTracker {
+  const startedAt = Date.now()
+  let subsDone = 0
   const heartbeat = setInterval(() => {
-    const now = Date.now()
-    if (now - lastLoggedAt < 2_000) return
-    emit(now)
+    log(`save in progress: ${subsDone}/5 sub-manifests done (${Date.now() - startedAt} ms elapsed)`)
   }, 2_000)
   heartbeat.unref?.()
-
   return {
-    addPlan(label, dirty) {
-      perLabel.set(label, { dirty, uploaded: 0 })
-      totalDirty += dirty
-    },
-    markChunk(label) {
-      const entry = perLabel.get(label)
-      if (entry) entry.uploaded++
-      totalUploaded++
-      const now = Date.now()
-      const tail = samples.length > 0 ? samples[samples.length - 1] : null
-      if (tail && tail.t === now) {
-        tail.uploaded = totalUploaded
-      } else {
-        samples.push({ t: now, uploaded: totalUploaded })
-      }
-      // Drop samples older than the window; compact once `head` gets large
-      // so the array doesn't grow unbounded for long saves.
-      while (head < samples.length && now - samples[head].t > windowMs) head++
-      if (head > 1_000 && head > samples.length >> 1) {
-        samples.splice(0, head)
-        head = 0
-      }
-      if (now - lastLoggedAt >= 500) emit(now)
+    markSubDone(_label) {
+      subsDone++
     },
     stop() {
       clearInterval(heartbeat)
     },
   }
-}
-
-/**
- * Count all nodes in a MantarayNode tree.
- * Each node = 1 chunk when uploaded to Swarm.
- */
-function countMantarayNodes(node: MantarayNodeInstance): number {
-  let count = 1
-  if (!node.forks) return count
-  for (const fork of Object.values(node.forks)) {
-    count += countMantarayNodes(fork.node)
-  }
-  return count
 }
 
 /**
@@ -1018,7 +818,9 @@ function bytesToHex(bytes: Uint8Array): string {
 //
 // Content-addressed on-disk cache for Mantaray manifest nodes. Keyed by the
 // chunk's Swarm ref (BMT hash), so entries are immutable by construction —
-// wiping data/.manifest-cache/ is always safe.
+// wiping data/.manifest-cache/ is always safe. Backs the StreamingMantaray
+// loader so repeat fetches across runs (and re-fetches after eviction)
+// short-circuit at disk instead of going to Bee.
 
 const MANIFEST_CACHE_DIR = resolve(DATA_DIR, '.manifest-cache')
 
@@ -1076,129 +878,10 @@ function makeCachedLoader(
   }
 }
 
-function makeCachedSaver(
-  inner: (data: Uint8Array) => Promise<Reference>,
-): (data: Uint8Array) => Promise<Reference> {
+function makeCachedSaver(inner: StorageSaver): StorageSaver {
   return async (data: Uint8Array) => {
     const ref = await inner(data)
     await writeCachedChunk(bytesToHex(ref), data)
     return ref
-  }
-}
-
-// ---------- Manifest snapshot ----------
-//
-// Single-file consolidation of every chunk belonging to one manifest tree.
-// Lets openManifest hydrate the full tree with one sequential read instead of
-// O(nodes) per-chunk file reads. Falls back to the chunk cache on miss or
-// corruption; can always be regenerated, so wiping snapshots is safe.
-
-const SNAPSHOT_MAGIC = new TextEncoder().encode('FCMS')
-const SNAPSHOT_VERSION = 1
-const SNAPSHOT_PREFIX = 'snapshot-'
-const SNAPSHOT_SUFFIX = '.bin'
-const REF_LEN = 32
-
-function snapshotPathFor(rootHex: string): string {
-  return resolve(MANIFEST_CACHE_DIR, `${SNAPSHOT_PREFIX}${rootHex}${SNAPSHOT_SUFFIX}`)
-}
-
-async function readSnapshot(rootHex: string): Promise<Map<string, Uint8Array> | null> {
-  let buf: Uint8Array
-  try {
-    const fileBuf = await readFile(snapshotPathFor(rootHex))
-    buf = new Uint8Array(fileBuf.buffer, fileBuf.byteOffset, fileBuf.byteLength)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw err
-  }
-
-  if (buf.length < SNAPSHOT_MAGIC.length + 1 + 4) return null
-  for (let i = 0; i < SNAPSHOT_MAGIC.length; i++) {
-    if (buf[i] !== SNAPSHOT_MAGIC[i]) return null
-  }
-  let off = SNAPSHOT_MAGIC.length
-  if (buf[off++] !== SNAPSHOT_VERSION) return null
-  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
-  const count = view.getUint32(off, true)
-  off += 4
-
-  const map = new Map<string, Uint8Array>()
-  for (let i = 0; i < count; i++) {
-    if (off + REF_LEN + 4 > buf.length) return null
-    const refHex = bytesToHex(buf.subarray(off, off + REF_LEN))
-    off += REF_LEN
-    const len = view.getUint32(off, true)
-    off += 4
-    if (off + len > buf.length) return null
-    map.set(refHex, buf.subarray(off, off + len))
-    off += len
-  }
-  return map
-}
-
-async function writeSnapshot(rootHex: string, chunks: Map<string, Uint8Array>): Promise<number> {
-  let total = SNAPSHOT_MAGIC.length + 1 + 4
-  for (const data of chunks.values()) total += REF_LEN + 4 + data.length
-
-  const buf = new Uint8Array(total)
-  buf.set(SNAPSHOT_MAGIC, 0)
-  let off = SNAPSHOT_MAGIC.length
-  buf[off++] = SNAPSHOT_VERSION
-  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
-  view.setUint32(off, chunks.size, true)
-  off += 4
-  for (const [refHex, data] of chunks) {
-    buf.set(hexToBytes(refHex), off)
-    off += REF_LEN
-    view.setUint32(off, data.length, true)
-    off += 4
-    buf.set(data, off)
-    off += data.length
-  }
-
-  const path = snapshotPathFor(rootHex)
-  await mkdir(MANIFEST_CACHE_DIR, { recursive: true })
-  const tmp = `${path}.${process.pid}.tmp`
-  await writeFile(tmp, buf)
-  await rename(tmp, path)
-  return total
-}
-
-async function collectTreeChunks(root: MantarayNodeInstance): Promise<Map<string, Uint8Array>> {
-  const map = new Map<string, Uint8Array>()
-
-  async function walk(node: MantarayNodeInstance): Promise<void> {
-    const addr = node.getContentAddress
-    if (!addr) throw new Error('manifest node missing contentAddress after save')
-    const refHex = bytesToHex(addr)
-    if (!map.has(refHex)) {
-      const data = await readCachedChunk(refHex)
-      if (!data) throw new Error(`manifest chunk ${refHex} missing from cache`)
-      map.set(refHex, data)
-    }
-    if (!node.forks) return
-    for (const fork of Object.values(node.forks)) {
-      await walk(fork.node)
-    }
-  }
-
-  await walk(root)
-  return map
-}
-
-async function pruneOldSnapshots(keepRootHex: string): Promise<void> {
-  const keep = `${SNAPSHOT_PREFIX}${keepRootHex}${SNAPSHOT_SUFFIX}`
-  let entries: string[]
-  try {
-    entries = await readdir(MANIFEST_CACHE_DIR)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
-    throw err
-  }
-  for (const name of entries) {
-    if (name === keep) continue
-    if (!name.startsWith(SNAPSHOT_PREFIX) || !name.endsWith(SNAPSHOT_SUFFIX)) continue
-    await unlink(resolve(MANIFEST_CACHE_DIR, name))
   }
 }
