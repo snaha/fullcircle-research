@@ -174,6 +174,7 @@ export async function* readBlocksNdjson(path: string): AsyncGenerator<BlockRecor
 export async function openManifest(
   bee: Bee,
   options: {
+    batchId: string
     manifestHash?: string
     onProgress?: (msg: string) => void
     cacheManifest?: boolean
@@ -181,7 +182,7 @@ export async function openManifest(
 ): Promise<Manifest> {
   const log = options.onProgress ?? console.log
   const cacheEnabled = options.cacheManifest !== false
-  const handler = makeStorageHandler(bee, '', cacheEnabled)
+  const handler = makeStorageHandler(bee, options.batchId, cacheEnabled)
 
   if (!options.manifestHash) {
     return {
@@ -743,8 +744,6 @@ function makeStorageHandler(bee: Bee, batchId: string, cacheEnabled: boolean): S
   const loader: StorageLoader = cacheEnabled
     ? makeCachedLoader(bee, counters)
     : async (ref: Reference) => (await bee.downloadData(bytesToHex(ref))).toUint8Array()
-  // batchId may be empty when only reading; saver is unused in that case but
-  // still needs to satisfy the type. Caller passes a real batchId at save.
   const rawSaver: StorageSaver = async (data: Uint8Array) => {
     const result = await bee.uploadData(batchId, data)
     return result.reference.toUint8Array() as Reference

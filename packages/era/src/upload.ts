@@ -154,6 +154,7 @@ if (uploadable.length === 0) {
 // growing manifest per-era would be O(N²) chunks.
 const manifest = await timed('open manifest', () =>
   openManifest(bee, {
+    batchId,
     manifestHash: args.manifestHash,
     onProgress: (msg) => console.log(msg),
     cacheManifest: args.cacheManifest,
