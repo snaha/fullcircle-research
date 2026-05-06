@@ -8,6 +8,7 @@ Project issue: https://github.com/ethersphere/swarm-accelerator/issues/5
 
 ## Documents
 
+- **[docs/PIPELINE.md](./docs/PIPELINE.md)** -- Data pipeline + storage layout: every stage (download → process → state-extract → upload), every artefact under `data/`, every cache (`.state-cache/`, `.manifest-cache/`, `proxy-cache-*.db`), and the on-Swarm Mantaray fork structure. Mermaid diagrams.
 - **[docs/RESEARCH.md](./docs/RESEARCH.md)** -- Technical research: Ethereum data structures, Swarm storage primitives, EIP-4444 history expiry, Portal Network, Era1 file format, prior art, and technical challenges
 - **[docs/PROPOSAL.md](./docs/PROPOSAL.md)** -- Implementation proposal: TypeScript tooling, architecture options, and day-by-day PoC plan
 - **[docs/INCENTIVIZATION.md](./docs/INCENTIVIZATION.md)** -- Sustainability research: funding models, endowment design, Data DAO structure, and hybrid approaches for perpetual storage
@@ -42,6 +43,7 @@ pnpm workspace. Single package today; UI / other packages slot in under
 - [data/](./data/) -- gitignored. Cached `.erae` downloads plus per-era output: `.summary.json`, `.blocks.ndjson` (full blocks as hex), `.index.ndjson` (interleaved `block` / `tx` records — scan to build number↔hash and txHash→location maps; append-friendly for an RPC tail). Also holds `proxy-cache.db` when the dev proxy runs.
 
 Package manager: **pnpm** (not npm). Root scripts:
+
 - `pnpm era:download [range|url]` -- download only
 - `pnpm era:process [range|url]` -- parse cached files only
 - `pnpm era:download-and-process [range|url]` -- both
