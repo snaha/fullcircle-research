@@ -154,6 +154,7 @@ if (uploadable.length === 0) {
 // growing manifest per-era would be O(N²) chunks.
 const manifest = await timed('open manifest', () =>
   openManifest(bee, {
+    batchId,
     manifestHash: args.manifestHash,
     onProgress: (msg) => console.log(msg),
     cacheManifest: args.cacheManifest,
@@ -188,7 +189,7 @@ if (args.ws) {
   await timed('open ws /chunks/stream', () => chunkStream!.open())
 }
 
-async function saveManifestNow(writeTreeSnapshot: boolean) {
+async function saveManifestNow() {
   return saveManifest(bee, manifest, {
     batchId,
     // Silent save — intermediate checkpoints would otherwise flood the log
@@ -197,7 +198,6 @@ async function saveManifestNow(writeTreeSnapshot: boolean) {
     onProgress: () => {},
     cacheManifest: args.cacheManifest,
     chunkStream,
-    writeTreeSnapshot,
   })
 }
 
@@ -211,16 +211,10 @@ for (const t of uploadable) {
       ? {
           every: args.saveEvery,
           fn: async (processed: number, lastBlockNumber: string) => {
-            // Skip the snapshot rewrite here: it walks the whole tree and
-            // pays O(total-chunks) disk I/O per checkpoint. Recovery from
-            // the previous snapshot + the intermediate manifest ref is
-            // good enough; the final save at end-of-run refreshes the
-            // snapshot.
-            //
             // Silent by design — the progress file below is the source of
             // truth for resuming. `cat data/<fileBase>.upload-progress.json`
             // when you need the intermediate manifest ref.
-            const refs = await saveManifestNow(false)
+            const refs = await saveManifestNow()
             const payload = {
               manifestReference: refs.root,
               subManifests: {
