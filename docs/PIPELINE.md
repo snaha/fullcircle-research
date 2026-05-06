@@ -257,10 +257,10 @@ flowchart TD
   META --> MJ["meta → ManifestMeta JSON"]
 
   subgraph CHUNKS["raw chunks on Swarm"]
-    BBND[(blockBundle<br/>= header‖body‖receipts‖TD<br/>varint-framed)]
-    AR[(AccountRecord JSON<br/>{addr, balance, eventCount, events[]})]
-    BER[(BlockEventsRecord JSON<br/>{block, events[{addr, pre, post}]})]
-    MM[(ManifestMeta JSON<br/>{firstBlock, lastBlock, …})]
+    BBND[("blockBundle<br/>= header‖body‖receipts‖TD<br/>varint-framed")]
+    AR[("AccountRecord JSON<br/>addr, balance, eventCount, events[ ]")]
+    BER[("BlockEventsRecord JSON<br/>block, events[ addr, pre, post ]")]
+    MM[("ManifestMeta JSON<br/>firstBlock, lastBlock, …")]
   end
 
   N -.-> BBND
