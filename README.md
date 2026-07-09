@@ -4,7 +4,7 @@ Research + tooling for storing Ethereum execution-layer history on [Swarm](https
 [swarm-accelerator#5](https://github.com/ethersphere/swarm-accelerator/issues/5).
 
 Research documents live in [docs/](./docs):
-[PIPELINE](./docs/PIPELINE.md) · [RESEARCH](./docs/RESEARCH.md) · [PROPOSAL](./docs/PROPOSAL.md) · [INCENTIVIZATION](./docs/INCENTIVIZATION.md).
+[APPROACHES](./docs/APPROACHES.md) · [PIPELINE](./docs/PIPELINE.md) · [RESEARCH](./docs/RESEARCH.md) · [PROPOSAL](./docs/PROPOSAL.md) · [INCENTIVIZATION](./docs/INCENTIVIZATION.md).
 
 ## Layout
 

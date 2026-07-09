@@ -27,11 +27,12 @@
 EIP-4444 (history expiry) is now live across all major Ethereum execution clients. Pre-merge history (~300-500 GB) can be pruned, and rolling expiry of older data is planned. This creates real demand for decentralized historical data distribution.
 
 Swarm is a natural fit for this because:
+
 - Ethereum trie nodes are under 4KB and Keccak256-addressed, closely matching Swarm's chunk model
 - Era1 files (the standard archive format) are content-addressed, self-verifying, and immutable
 - Swarm provides economic incentives (BZZ tokens) for persistence, unlike the Portal Network's altruistic model
 
-The Portal Network is Ethereum's own answer to history distribution, but it's altruistic/voluntary with no persistence guarantees. Swarm and Portal are complementary, not competitive.
+The Portal Network was designed as Ethereum's own answer to history distribution, but it is altruistic/voluntary with no persistence guarantees — and as of 2026 it has not launched as a live network (clients remain pre-production). If it ships, Swarm and Portal are complementary, not competitive; today the gap it was meant to fill is open.
 
 ---
 
@@ -41,16 +42,17 @@ The Portal Network is Ethereum's own answer to history distribution, but it's al
 
 An Ethereum block consists of:
 
-| Component | Description | Encoding | Typical Size |
-|---|---|---|---|
-| Header | Parent hash, state root, tx root, receipts root, bloom filter, gas, timestamp, etc. | RLP | ~500-600 bytes |
-| Body | Transactions + withdrawals (post-Shanghai) | RLP | Variable (avg ~100-200 KB total block) |
-| Receipts | Status, gas used, logs, bloom per transaction | RLP | Variable |
-| Ommers | Always empty post-Merge | RLP | Negligible |
+| Component | Description                                                                         | Encoding | Typical Size                           |
+| --------- | ----------------------------------------------------------------------------------- | -------- | -------------------------------------- |
+| Header    | Parent hash, state root, tx root, receipts root, bloom filter, gas, timestamp, etc. | RLP      | ~500-600 bytes                         |
+| Body      | Transactions + withdrawals (post-Shanghai)                                          | RLP      | Variable (avg ~100-200 KB total block) |
+| Receipts  | Status, gas used, logs, bloom per transaction                                       | RLP      | Variable                               |
+| Ommers    | Always empty post-Merge                                                             | RLP      | Negligible                             |
 
 ### 2.2 State Trie
 
 Ethereum uses a Modified Merkle Patricia Trie (MPT) with four sub-tries per block:
+
 - **State trie**: `keccak256(address)` -> `rlp([nonce, balance, storageRoot, codeHash])`
 - **Storage trie**: Per-contract key-value storage
 - **Transaction trie**: Per-block transaction index
@@ -60,20 +62,20 @@ Trie node types: branch (17-element), extension (path + next), leaf (path + valu
 
 ### 2.3 Data Sizes (2025-2026)
 
-| Data Category | Size | Notes |
-|---|---|---|
-| Pre-merge history (bodies + receipts) | 300-500 GB | What EIP-4444 prunes first |
-| Post-merge history | ~200-400 GB, growing | ~50-60 GB/month |
-| All headers (genesis to present) | ~10-15 GB | Relatively small |
-| Current state snapshot | ~50+ GB | Growing continuously |
-| Historical state (Erigon-optimized) | 1.6-2 TB | Up to 20 TB unoptimized (Geth hash-based) |
+| Data Category                         | Size                 | Notes                                     |
+| ------------------------------------- | -------------------- | ----------------------------------------- |
+| Pre-merge history (bodies + receipts) | 300-500 GB           | What EIP-4444 prunes first                |
+| Post-merge history                    | ~200-400 GB, growing | ~50-60 GB/month                           |
+| All headers (genesis to present)      | ~10-15 GB            | Relatively small                          |
+| Current state snapshot                | ~50+ GB              | Growing continuously                      |
+| Historical state (Erigon-optimized)   | 1.6-2 TB             | Up to 20 TB unoptimized (Geth hash-based) |
 
-| Client & Mode | Disk Size |
-|---|---|
-| Geth full node (snap sync, pruned) | 650-700 GB |
-| Geth path-based archive | 1.9-2.0 TB |
-| Erigon full node | ~1 TB |
-| Erigon archive | 1.6-1.77 TB |
+| Client & Mode                      | Disk Size   |
+| ---------------------------------- | ----------- |
+| Geth full node (snap sync, pruned) | 650-700 GB  |
+| Geth path-based archive            | 1.9-2.0 TB  |
+| Erigon full node                   | ~1 TB       |
+| Erigon archive                     | 1.6-1.77 TB |
 
 Chain growth: ~7,200 blocks/day, ~50-60 GB/month (full node before pruning).
 
@@ -92,17 +94,21 @@ Chain growth: ~7,200 blocks/day, ~50-60 GB/month (full node before pruning).
 Swarm stores data as 4KB chunks distributed via the DISC (Distributed Immutable Storage of Chunks) model -- a modified Kademlia DHT where nodes store actual chunk data, not just pointers.
 
 **Content-Addressed Chunks (CAC):**
+
 ```
 address = keccak256(span || bmt_root_hash(payload))
 ```
+
 - Payload: up to 4096 bytes
 - Span: 8-byte little-endian uint64 (total data length of subtree)
 - BMT: Binary Merkle Tree hash over 128 x 32-byte segments of the padded payload
 
 **Single Owner Chunks (SOC):**
+
 ```
 address = keccak256(identifier || owner_eth_address)
 ```
+
 - Enables mutable content at deterministic addresses
 - Owner signs `keccak256(identifier || cac_address)` for integrity
 
@@ -111,22 +117,24 @@ address = keccak256(identifier || owner_eth_address)
 Large files are split into a tree with **branching factor 128** (4096 / 32 = 128 hashes per chunk):
 
 | Tree Level | Data Addressable |
-|---|---|
-| 0 (leaves) | 4 KB per chunk |
-| 1 | 512 KB |
-| 2 | 64 MB |
-| 3 | 8 GB |
-| 4 | 1 TB |
-| 8 | ~16 EB |
+| ---------- | ---------------- |
+| 0 (leaves) | 4 KB per chunk   |
+| 1          | 512 KB           |
+| 2          | 64 MB            |
+| 3          | 8 GB             |
+| 4          | 1 TB             |
+| 8          | ~16 EB           |
 
 The root chunk's address becomes the file's reference. Retrieval is top-down: download root, extract child references, recurse until leaf data chunks are reached.
 
 ### 3.3 Feeds
 
 Built on SOCs. A feed is identified by `(owner_address, topic)`:
+
 ```
 feed_identifier = keccak256(topic || index)
 ```
+
 Sequential index enables mutable pointers -- perfect for "latest block" or "latest era1 file" references.
 
 ### 3.4 Manifests (Mantaray)
@@ -201,6 +209,7 @@ IPLD has Ethereum codec specs for state data structures: https://ipld.io/specs/c
 ### EIP-7927 (Meta EIP)
 
 Bundles related changes:
+
 - **EIP-4444**: Pruning policy
 - **EIP-7642**: New `eth/69` DevP2P protocol (doesn't serve pre-merge history)
 - **EIP-7639**: Permission to drop pre-merge history
@@ -218,16 +227,18 @@ With history being actively dropped from nodes, there's urgent need for reliable
 
 ## 6. Portal Network
 
+> **Status (2026): not live.** Despite years of development and four client implementations, the Portal Network has not launched as a production network; the state sub-network clients in particular remain pre-production. The comparison below describes the design, not an operating service.
+
 ### Architecture
 
-Ethereum's own solution for distributing historical data. Multiple specialized DHT sub-networks built on Discovery v5:
+Ethereum's own solution (in design) for distributing historical data. Multiple specialized DHT sub-networks built on Discovery v5:
 
-| Sub-network | Purpose |
-|---|---|
-| History Network | Block bodies and receipts |
-| Beacon Light Client | Consensus layer tracking |
-| State Network | Account and contract storage |
-| Transaction Gossip | Lightweight mempool |
+| Sub-network         | Purpose                      |
+| ------------------- | ---------------------------- |
+| History Network     | Block bodies and receipts    |
+| Beacon Light Client | Consensus layer tracking     |
+| State Network       | Account and contract storage |
+| Transaction Gossip  | Lightweight mempool          |
 
 ### How It Works
 
@@ -243,16 +254,16 @@ Ethereum's own solution for distributing historical data. Multiple specialized D
 
 ### Portal vs Swarm
 
-| Aspect | Portal Network | Swarm |
-|---|---|---|
-| Scope | Ethereum-specific | General-purpose storage |
-| Incentives | Altruistic/voluntary | BZZ token economics |
-| Data model | Block-number addressed | Content-hash addressed |
-| Verification | Built-in header chain proofs | BMT hash verification |
-| Persistence | Best-effort, no guarantees | Postage stamp-funded |
-| Integration | Built into EL clients | Separate network |
+| Aspect       | Portal Network               | Swarm                   |
+| ------------ | ---------------------------- | ----------------------- |
+| Scope        | Ethereum-specific            | General-purpose storage |
+| Incentives   | Altruistic/voluntary         | BZZ token economics     |
+| Data model   | Block-number addressed       | Content-hash addressed  |
+| Verification | Built-in header chain proofs | BMT hash verification   |
+| Persistence  | Best-effort, no guarantees   | Postage stamp-funded    |
+| Integration  | Built into EL clients        | Separate network        |
 
-**They are complementary, not competitive.** Portal has deeper Ethereum integration but no persistence guarantees. Swarm has economic incentives but needs additional verification layers.
+**They are complementary, not competitive — in design.** Portal has deeper Ethereum integration but no persistence guarantees; Swarm has economic incentives but needs additional verification layers. In practice, Portal's failure to launch (as of 2026) means Swarm-based storage is not competing with a free alternative — the persistence gap EIP-4444 opened is unserved.
 
 ---
 
@@ -267,16 +278,17 @@ era1 := Version | block-tuple* | Accumulator | BlockIndex
 block-tuple := CompressedHeader | CompressedBody | CompressedReceipts | TotalDifficulty
 ```
 
-| Entry | Type Code | Contents |
-|---|---|---|
-| CompressedHeader | `0x0300` | `snappyFramed(rlp(header))` |
-| CompressedBody | `0x0400` | `snappyFramed(rlp(block_body))` |
-| CompressedReceipts | `0x0500` | `snappyFramed(rlp(receipts))` |
-| TotalDifficulty | `0x0600` | `uint256` |
-| Accumulator | `0x0700` | SSZ hash_tree_root of header records |
-| BlockIndex | `0x6632` | Starting number + offsets + count |
+| Entry              | Type Code | Contents                             |
+| ------------------ | --------- | ------------------------------------ |
+| CompressedHeader   | `0x0300`  | `snappyFramed(rlp(header))`          |
+| CompressedBody     | `0x0400`  | `snappyFramed(rlp(block_body))`      |
+| CompressedReceipts | `0x0500`  | `snappyFramed(rlp(receipts))`        |
+| TotalDifficulty    | `0x0600`  | `uint256`                            |
+| Accumulator        | `0x0700`  | SSZ hash_tree_root of header records |
+| BlockIndex         | `0x6632`  | Starting number + offsets + count    |
 
 **Key properties:**
+
 - **8,192 blocks per file** max
 - **Snappy compressed** after RLP encoding
 - **Self-verifying**: accumulator root can be validated against known canonical accumulator
@@ -290,12 +302,12 @@ Same structure but with SSZ-encoded beacon blocks instead of RLP.
 
 From [eth-clients/history-endpoints](https://github.com/eth-clients/history-endpoints):
 
-| Source | URL |
-|--------|-----|
+| Source                | URL                                         |
+| --------------------- | ------------------------------------------- |
 | ethPandaOps (mainnet) | `https://data.ethpandaops.io/era1/mainnet/` |
-| Nimbus (mainnet) | `https://mainnet.era1.nimbus.team` |
+| Nimbus (mainnet)      | `https://mainnet.era1.nimbus.team`          |
 | ethPandaOps (Sepolia) | `https://data.ethpandaops.io/era1/sepolia/` |
-| Torrent | Available via magnet link |
+| Torrent               | Available via magnet link                   |
 
 Files follow naming: `mainnet-<epoch>-<root>.era1`, each epoch = 8,192 blocks.
 
@@ -327,6 +339,7 @@ Swarm chunk retrieval adds network latency vs local disk. For block sync (which 
 ### 8.4 Indexing
 
 Ethereum data is naturally indexed by block number, tx hash, address, and log topics. Swarm's content addressing doesn't natively support these query patterns. Solutions:
+
 - Feeds for block-number -> reference mapping
 - Manifests for structured access
 - Separate index structures built on Swarm
@@ -344,6 +357,7 @@ Era1 files are self-verifying via accumulator roots. Individual chunks can be BM
 ## 9. References
 
 ### Ethereum Data & History Expiry
+
 - [EIP-4444: Bound Historical Data in Execution Clients](https://eips.ethereum.org/EIPS/eip-4444)
 - [EIP-7927: History Expiry Meta](https://eips.ethereum.org/EIPS/eip-7927)
 - [Ethereum Foundation: Partial History Expiry (July 2025)](https://blog.ethereum.org/en/2025/07/08/partial-history-exp)
@@ -352,17 +366,20 @@ Era1 files are self-verifying via accumulator roots. Individual chunks can be BM
 - [Geth Database Documentation](https://geth.ethereum.org/docs/fundamentals/databases)
 
 ### Portal Network
+
 - [Portal Network Specs](https://github.com/ethereum/portal-network-specs)
 - [Portal Network History Sub-protocol](https://github.com/ethereum/portal-network-specs/blob/master/history/history-network.md)
 - [ethereum.org Portal Network](https://ethereum.org/developers/docs/networking-layer/portal-network/)
 
 ### Swarm + Ethereum Proposals
+
 - [Ethereum Blockchain State on Swarm (zelig)](https://hackmd.io/@zelig/Bkt-c42YV)
 - [Trustless Access to Ethereum State with Swarm](https://ethresear.ch/t/trustless-access-to-ethereum-state-with-swarm/17350)
 - [Swarm Data Chain (jmozah)](https://hackmd.io/@jmozah/HyEBlTWmR)
 - [Ethereum's Data Roadmap and Client Democratisation](https://hackmd.io/@tonytony/Hk0KtEvuj)
 
 ### Swarm Documentation
+
 - [Swarm DISC Model](https://docs.ethswarm.org/docs/concepts/DISC/)
 - [Swarm Erasure Coding](https://docs.ethswarm.org/docs/concepts/DISC/erasure-coding/)
 - [Swarm Feeds](https://docs.ethswarm.org/docs/develop/tools-and-features/feeds/)
@@ -371,15 +388,18 @@ Era1 files are self-verifying via accumulator roots. Individual chunks can be BM
 - [The Book of Swarm](https://docs.ethswarm.org/the-book-of-swarm-viktor-tron-v1.0-pre-release7.pdf)
 
 ### Other Decentralized Storage Projects
+
 - [Old Faithful: Solana on Filecoin](https://docs.triton.one/project-yellowstone/old-faithful-historical-archive/old-faithful-public-report)
 - [IPLD Ethereum Codecs](https://ipld.io/specs/codecs/dag-eth/state/)
 
 ### Ethereum Data Structures
+
 - [ethereum.org: Patricia Merkle Trie](https://ethereum.org/developers/docs/data-structures-and-encoding/patricia-merkle-trie/)
 - [ethereum.org: RLP Encoding](https://ethereum.org/developers/docs/data-structures-and-encoding/rlp/)
 - [ethereum.org: SSZ](https://ethereum.org/developers/docs/data-structures-and-encoding/ssz/)
 
 ### TypeScript Libraries
+
 - [@ethereumjs/e2store (Era1 parsing)](https://www.npmjs.com/package/@ethereumjs/e2store)
 - [@ethereumjs/block (Block parsing)](https://www.npmjs.com/package/@ethereumjs/block)
 - [@ethereumjs/rlp (RLP encoding)](https://www.npmjs.com/package/@ethereumjs/rlp)
@@ -388,5 +408,6 @@ Era1 files are self-verifying via accumulator roots. Individual chunks can be BM
 - [EthereumJS Monorepo](https://github.com/ethereumjs/ethereumjs-monorepo)
 
 ### Client Implementations
+
 - [Erigon Documentation](https://docs.erigon.tech/get-started/readme/why-using-erigon)
 - [Erigon v3 Architecture](https://erigon.tech/announcing-erigon-v3-beta-1-a-scalable-and-efficient-ethereum-integrated-client/)

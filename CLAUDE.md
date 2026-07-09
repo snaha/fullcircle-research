@@ -8,6 +8,7 @@ Project issue: https://github.com/ethersphere/swarm-accelerator/issues/5
 
 ## Documents
 
+- **[docs/APPROACHES.md](./docs/APPROACHES.md)** -- BD-facing summary: every storage/indexing approach (built and researched), comparison table, feasibility factors (scale, verification, economics), and next steps toward a feasibility study
 - **[docs/PIPELINE.md](./docs/PIPELINE.md)** -- Data pipeline + storage layout: every stage (download → process → state-extract → upload), every artefact under `data/`, every cache (`.state-cache/`, `.manifest-cache/`, `proxy-cache-*.db`), and the on-Swarm Mantaray fork structure. Mermaid diagrams.
 - **[docs/RESEARCH.md](./docs/RESEARCH.md)** -- Technical research: Ethereum data structures, Swarm storage primitives, EIP-4444 history expiry, Portal Network, Era1 file format, prior art, and technical challenges
 - **[docs/PROPOSAL.md](./docs/PROPOSAL.md)** -- Implementation proposal: TypeScript tooling, architecture options, and day-by-day PoC plan

@@ -1,11 +1,15 @@
 # FullCircle: Incentivization Alternatives Research
 
+> **Revision (July 2026):** the original cost assumption of ~$10-50/TB/year was ~30× too low. Verified against the official bee-js pricing table (0.021 xBZZ/day/GB at 1+ TB batch depth) and CoinGecko BZZ price (~$0.10), real Swarm storage cost is **~$770/TB/year**, and the full erae archive is **~1.24 TB** (recent era files are 700 MB-1 GB, not tens of MB). Corrected figures are marked throughout; the full re-derivation, including a subscription revenue model with break-even at 7-12 customers, is in [APPROACHES.md §4.3](./APPROACHES.md) and the [detailed calculations](https://claude.ai/share/265b7a2d-0e04-49dd-89a3-b77f9e782642).
+
 ## The Core Problem
 
 Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing postage stamp purchases. There's no natural economic incentive for Swarm nodes to store blockchain data unless specifically funded. This is an operational cost that needs a sustainability model.
 
 **Key constraints:**
-- Swarm storage costs ~$10-50/TB/year depending on redundancy
+
+- Swarm storage costs ~$770/TB/year at current network prices (0.021 xBZZ/day/GB at 1+ TB scale, BZZ ≈ $0.10) — price scales with BZZ and network utilization
+- Full archive is ~1.24 TB today (~$950/year postage), growing ~20 GB/month (~$184/year added per year of growth)
 - Data must persist indefinitely (Ethereum history is permanent)
 - No single entity should bear full responsibility
 - Solution must be decentralized and censorship-resistant
@@ -19,18 +23,20 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 **How it works:** One-time upfront payment creates a storage endowment that funds perpetual storage through yield/interest, assuming storage costs decline over time.
 
 **Arweave's approach:**
+
 - Users pay for 200 years of storage at current prices
 - ~5% goes to miners immediately, 95% enters an endowment pool
 - Assumes conservative 0.5% annual storage cost decline (actual average is 30.5%/year)
 - Self-sustaining: as network usage grows, more tokens enter the endowment
 
 **Adaptation for FullCircle:**
+
 - Create a BZZ endowment contract that:
   1. Receives one-time funding (grants, donations, protocol fees)
   2. Invests in DeFi yield strategies (e.g., staked ETH, stablecoins)
   3. Uses yield to purchase postage stamps periodically
 - Calculate required principal based on storage costs and yield assumptions
-- For 1 TB at ~$10-50/TB/year storage cost, a $500-2,500 endowment at 5% yield could sustain indefinitely
+- For the full ~1.24 TB archive at ~$950/year postage, a ~$25,000 endowment at a conservative 4% yield sustains it indefinitely — grant-scale (EF ESP range), not pocket change, but still a one-time cost
 
 **Pros:** One-time funding, self-sustaining, aligned incentives
 **Cons:** Requires significant initial capital, DeFi risk, BZZ price volatility
@@ -41,15 +47,16 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 
 **Available funding sources:**
 
-| Source | Focus | Amount Range |
-|--------|-------|--------------|
-| Ethereum Foundation ESP | Core infrastructure, public goods | $30K-$500K+ |
-| Optimism RetroPGF | Developer tools, onchain builders | Variable |
-| Gitcoin Grants | Community-selected public goods | Quadratic funding |
-| Swarm Grants Program | Swarm ecosystem expansion | Project-dependent |
-| Protocol Guild | Core Ethereum contributors | Collective funding |
+| Source                  | Focus                             | Amount Range       |
+| ----------------------- | --------------------------------- | ------------------ |
+| Ethereum Foundation ESP | Core infrastructure, public goods | $30K-$500K+        |
+| Optimism RetroPGF       | Developer tools, onchain builders | Variable           |
+| Gitcoin Grants          | Community-selected public goods   | Quadratic funding  |
+| Swarm Grants Program    | Swarm ecosystem expansion         | Project-dependent  |
+| Protocol Guild          | Core Ethereum contributors        | Collective funding |
 
 **Strategy for FullCircle:**
+
 1. Apply for ESP grant for initial development + 2-year storage funding
 2. Build measurable impact metrics (downloads, API calls, nodes bootstrapped)
 3. Apply for Optimism RetroPGF based on demonstrated impact
@@ -65,12 +72,14 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 **Concept:** Ethereum protocol changes that allocate a portion of fees to historical data preservation.
 
 **Options:**
+
 - **EIP for history fees:** Small percentage of base fees directed to data archival
 - **Proposer-Builder Separation (PBS) integration:** Block builders contribute to archival as a public good
 - **MEV redistribution:** Portion of MEV profits funds historical data storage
 - **L2 sequencer fees:** L2s pay for L1 history preservation they depend on
 
 **Estimated funding potential:**
+
 - Ethereum burns ~$5-20M/day in base fees
 - 0.1% allocation = $5K-20K/day = $1.8M-7.3M/year
 - More than sufficient for TB-scale storage
@@ -85,6 +94,7 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 **Concept:** Generate revenue from data access that funds ongoing storage.
 
 **Revenue streams:**
+
 - **API access tiers:** Free tier (rate-limited) + paid premium (higher throughput, SLAs)
 - **Enterprise subscriptions:** Block explorers, analytics providers, researchers
 - **RPC endpoint premium:** Faster historical data retrieval
@@ -92,11 +102,13 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 
 **Example pricing model:**
 
-| Tier | Price | Features |
-|------|-------|----------|
-| Free | $0 | 100 req/day, best-effort |
-| Developer | $29/mo | 10K req/day, 99% SLA |
+| Tier       | Price   | Features                                |
+| ---------- | ------- | --------------------------------------- |
+| Free       | $0      | 100 req/day, best-effort                |
+| Developer  | $29/mo  | 10K req/day, 99% SLA                    |
 | Enterprise | $299/mo | Unlimited, 99.9% SLA, dedicated support |
+
+**Updated model (May 2026):** the [verified economics analysis](https://claude.ai/share/265b7a2d-0e04-49dd-89a3-b77f9e782642) refined this into history-depth tiers — Seed $20/mo (30-day window), Protocol $75/mo (1 year), Archive $300/mo (full history), Infrastructure $1,000/mo (full + SLA) — all priced below incumbent archive-RPC rates ($250-5,000/mo). At $235-380/mo total opex, break-even is 7-12 customers; the recommended go-to-market lead is the Archive tier, whose buyers (explorers, analytics, L2s) are under direct EIP-4444 pressure.
 
 **Pros:** Market-driven, sustainable, aligns incentives
 **Cons:** Competes with free alternatives, requires product development, may reduce adoption
@@ -108,12 +120,14 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 **Concept:** DAO that coordinates funding and governance of Ethereum historical data storage.
 
 **Structure:**
+
 - **Membership:** NFT or token-based, gives voting rights
 - **Treasury:** Funded by member contributions, grants, revenue
 - **Governance:** Members vote on storage priorities, funding allocation
 - **Operations:** Smart contracts manage postage stamp purchases
 
 **Potential members/funders:**
+
 - Block explorers (Etherscan, Blockscout)
 - Infrastructure providers (Infura, Alchemy, Ankr)
 - L2 networks (dependent on L1 history)
@@ -130,16 +144,19 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 **Concept:** Ethereum validators contribute a small portion of rewards to historical data preservation.
 
 **Mechanisms:**
+
 - **Voluntary staking pool:** Validators opt-in to donate portion of rewards
 - **Staking protocol integration:** LST protocols (Lido, Rocket Pool) allocate small %
 - **Protocol-level:** Future EIP requiring minimal contribution
 
 **Economics:**
+
 - ~1M validators earning ~4-5% APY on 32 ETH
 - Total staking rewards: ~$2B+/year
 - 0.01% voluntary contribution = $200K/year
 
 **Implementation:**
+
 - Smart contract that validators can delegate small % of rewards to
 - Contract automatically purchases postage stamps
 - Public dashboard showing contributors and storage funded
@@ -151,9 +168,12 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 
 ### 7. Hybrid Swarm + Portal Network
 
+> **Status note (2026):** the Portal Network has not launched as a live network; its clients remain pre-production. This model is contingent on Portal shipping and should not be weighted in near-term planning.
+
 **Concept:** Leverage Portal Network's altruistic model for retrieval while using Swarm for persistent storage backup.
 
 **Architecture:**
+
 ```
 [Era1 Data] --> [Swarm] (funded persistence, backup)
                   |
@@ -165,12 +185,14 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 ```
 
 **Benefits:**
+
 - Portal provides free retrieval (no ongoing cost for reads)
 - Swarm provides guaranteed persistence (paid, but reliable)
 - Redundancy across two networks
 - Lower Swarm costs (archival only, not serving)
 
 **Implementation:**
+
 - Upload Era1 files to Swarm with minimal redundancy
 - Portal Network serves as primary retrieval layer
 - Swarm acts as source-of-truth backup
@@ -187,21 +209,21 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 
 **Potential sponsors:**
 
-| Sponsor Type | Motivation |
-|--------------|------------|
-| Block explorers | Core dependency, marketing |
-| Infrastructure providers | Product differentiation |
-| L2 networks | L1 dependency, ecosystem health |
-| Exchanges | Compliance, audit trails |
-| Academic institutions | Research access |
+| Sponsor Type             | Motivation                      |
+| ------------------------ | ------------------------------- |
+| Block explorers          | Core dependency, marketing      |
+| Infrastructure providers | Product differentiation         |
+| L2 networks              | L1 dependency, ecosystem health |
+| Exchanges                | Compliance, audit trails        |
+| Academic institutions    | Research access                 |
 
 **Sponsorship tiers:**
 
-| Tier | Annual Contribution | Benefits |
-|------|---------------------|----------|
-| Bronze | $10K/year | Logo on website, 1 epoch named |
-| Silver | $50K/year | Dedicated API tier, 10 epochs |
-| Gold | $250K/year | Full archive sponsorship, board seat |
+| Tier   | Annual Contribution | Benefits                             |
+| ------ | ------------------- | ------------------------------------ |
+| Bronze | $10K/year           | Logo on website, 1 epoch named       |
+| Silver | $50K/year           | Dedicated API tier, 10 epochs        |
+| Gold   | $250K/year          | Full archive sponsorship, board seat |
 
 **Pros:** Simple, immediate funding, marketing opportunity
 **Cons:** Centralization risk, depends on goodwill
@@ -213,11 +235,13 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 **Concept:** Create additional token incentives for nodes specifically storing Ethereum historical data.
 
 **Mechanism:**
+
 - Define "Ethereum Archive" storage class in Swarm
 - Nodes that verifiably store Era1 files receive bonus rewards
 - Funded by protocol inflation, grants, or fees
 
 **Technical requirements:**
+
 - Content verification (prove node has specific Era1 files)
 - Periodic challenges (random chunk retrieval)
 - Reward distribution based on storage and uptime
@@ -232,14 +256,16 @@ Storing 1+ TB of Ethereum historical data on Swarm indefinitely requires ongoing
 **Concept:** Swarm or a dedicated protocol allocates token inflation specifically for public goods storage.
 
 **Design:**
+
 - Designate % of BZZ inflation for "public goods storage reserve"
 - Governance decides which datasets qualify (Ethereum history, IPFS pinning, etc.)
 - Reserve automatically purchases postage stamps for qualified data
 
 **Example:**
+
 - 1% of BZZ supply/year allocated to public goods
-- At $0.20/BZZ and 63M supply = $126K/year
-- Sufficient for several TB of redundant storage
+- At $0.10/BZZ (CoinGecko, May 2026) and 63M supply = ~$63K/year
+- Sufficient for tens of TB at the verified ~$770/TB/year rate
 
 **Pros:** Built-in sustainability, protocol-native
 **Cons:** Requires Swarm governance approval, dilution concerns
@@ -258,7 +284,7 @@ For FullCircle, combining multiple mechanisms provides the most resilient fundin
 
 ### Phase 2: Sustainability (Year 2+)
 
-1. **Create endowment contract** - Target $500K principal for perpetual storage
+1. **Create endowment contract** - ~$25-35K principal covers the perpetual archive (verified May 2026); a larger target ($100K+) extends coverage to operations and growth headroom
 2. **Launch API revenue model** - Freemium tiers for power users
 3. **Apply for RetroPGF** - Based on demonstrated impact metrics
 
@@ -272,14 +298,14 @@ For FullCircle, combining multiple mechanisms provides the most resilient fundin
 
 ## Key Metrics to Track
 
-| Metric | Purpose |
-|--------|---------|
-| Total data stored (TB) | Scale of impact |
-| Unique downloads/month | Adoption |
+| Metric                        | Purpose                  |
+| ----------------------------- | ------------------------ |
+| Total data stored (TB)        | Scale of impact          |
+| Unique downloads/month        | Adoption                 |
 | Nodes bootstrapped from Swarm | Core use case validation |
-| Cost per TB/year | Efficiency |
-| Funding runway (months) | Sustainability |
-| Revenue/grants ratio | Self-sufficiency |
+| Cost per TB/year              | Efficiency               |
+| Funding runway (months)       | Sustainability           |
+| Revenue/grants ratio          | Self-sufficiency         |
 
 ---
 
@@ -287,38 +313,41 @@ For FullCircle, combining multiple mechanisms provides the most resilient fundin
 
 ### Economic Model
 
-**Storage Cost Assumptions (Swarm):**
+**Storage Cost Assumptions (Swarm, verified May 2026 — bee-js pricing at BZZ $0.07/$0.10/$0.15):**
 
-| Parameter | Conservative | Moderate | Optimistic |
-|-----------|--------------|----------|------------|
-| Cost per TB/year | $50 | $25 | $10 |
-| Annual cost decline | 0.5% | 5% | 15% |
-| Target data size | 1 TB | 1 TB | 1 TB |
+| Parameter            | Conservative                  | Moderate | Optimistic |
+| -------------------- | ----------------------------- | -------- | ---------- |
+| Cost per TB/year     | $1,150                        | $770     | $540       |
+| BZZ price assumption | $0.15                         | $0.10    | $0.07      |
+| Target data size     | 1.24 TB + ~240 GB/year growth | same     | same       |
+
+Note: Swarm's price oracle adjusts with network utilization, so these figures can move in either direction over a multi-year horizon; the BZZ price is the dominant short-term variable.
 
 **Yield Strategy Options (2025 DeFi Landscape):**
 
-| Strategy | Expected APY | Risk Level | Notes |
-|----------|--------------|------------|-------|
-| ETH Staking (Lido stETH) | 3-4% | Low | Battle-tested, $30B+ TVL |
-| Aave USDC Lending | 4-7% | Low-Medium | Variable rates, $40B TVL |
-| Ethena sUSDe | 4-8% | Medium | Delta-neutral, $12B circulation |
-| Pendle Fixed Yield | 5-10% | Medium | Yield tokenization |
-| Curve LP + CRV | 8-15% | Medium-High | Impermanent loss risk |
+| Strategy                 | Expected APY | Risk Level  | Notes                           |
+| ------------------------ | ------------ | ----------- | ------------------------------- |
+| ETH Staking (Lido stETH) | 3-4%         | Low         | Battle-tested, $30B+ TVL        |
+| Aave USDC Lending        | 4-7%         | Low-Medium  | Variable rates, $40B TVL        |
+| Ethena sUSDe             | 4-8%         | Medium      | Delta-neutral, $12B circulation |
+| Pendle Fixed Yield       | 5-10%        | Medium      | Yield tokenization              |
+| Curve LP + CRV           | 8-15%        | Medium-High | Impermanent loss risk           |
 
 **Recommended: Conservative 4% APY target using stETH + Aave stablecoin mix**
 
 ### Required Principal Calculation
 
 ```
-Annual storage cost = $25-50/TB
+Annual storage cost = ~$950 (1.24 TB × ~$770/TB at BZZ $0.10)
 Required yield at 4% APY = Principal × 0.04
-Principal needed = $25-50 / 0.04 = $625-1,250 per TB
+Principal needed = $950 / 0.04 = ~$24,000
 
-For 1 TB with 2x safety margin:
-  Minimum principal = $2,500
+With growth (~$184/year added per year) and BZZ volatility margin:
+  Recommended principal = ~$25,000-35,000
 
-For full Ethereum history (~1.5 TB) with 3x margin:
-  Recommended principal = $5,000-10,000
+Fundable via a single EF ESP grant ($10K-100K range);
+no longer coverable from pocket change, but still a
+one-time cost for permanent preservation.
 ```
 
 ### Smart Contract Architecture
@@ -380,22 +409,22 @@ contract FullCircleEndowment {
 
 ### Risk Mitigation
 
-| Risk | Mitigation Strategy |
-|------|---------------------|
+| Risk                | Mitigation Strategy                               |
+| ------------------- | ------------------------------------------------- |
 | Smart Contract Risk | Use audited, battle-tested protocols (Lido, Aave) |
-| Price Volatility | Maintain 50/50 ETH/stablecoin split |
-| BZZ Price Spikes | Keep 6-month BZZ buffer |
-| Yield Compression | Conservative 4% target vs 8%+ available |
-| Governance | Multi-sig with timelock for parameter changes |
+| Price Volatility    | Maintain 50/50 ETH/stablecoin split               |
+| BZZ Price Spikes    | Keep 6-month BZZ buffer                           |
+| Yield Compression   | Conservative 4% target vs 8%+ available           |
+| Governance          | Multi-sig with timelock for parameter changes     |
 
 ### Implementation Phases
 
-| Phase | Timeline | Deliverable |
-|-------|----------|-------------|
-| Phase 1 | Month 1-2 | Deploy basic contract with manual operations |
-| Phase 2 | Month 3-4 | Add automated yield harvesting via Chainlink Keepers |
+| Phase   | Timeline  | Deliverable                                               |
+| ------- | --------- | --------------------------------------------------------- |
+| Phase 1 | Month 1-2 | Deploy basic contract with manual operations              |
+| Phase 2 | Month 3-4 | Add automated yield harvesting via Chainlink Keepers      |
 | Phase 3 | Month 5-6 | Integrate Swarm postage API for automatic stamp purchases |
-| Phase 4 | Ongoing | Add governance for strategy rebalancing |
+| Phase 4 | Ongoing   | Add governance for strategy rebalancing                   |
 
 ---
 
@@ -440,32 +469,34 @@ The Ethereum historical data problem affects multiple stakeholders who each bene
 
 **Token Model Options:**
 
-| Model | Pros | Cons |
-|-------|------|------|
-| **NFT Membership** | Simple, no speculation, clear stakeholders | Less liquid, harder to scale |
-| **Governance Token** | Liquid, tradeable, familiar | Speculation risk, whale control |
-| **Reputation-Based** | Merit-driven, sybil-resistant | Complex to implement |
+| Model                | Pros                                       | Cons                            |
+| -------------------- | ------------------------------------------ | ------------------------------- |
+| **NFT Membership**   | Simple, no speculation, clear stakeholders | Less liquid, harder to scale    |
+| **Governance Token** | Liquid, tradeable, familiar                | Speculation risk, whale control |
+| **Reputation-Based** | Merit-driven, sybil-resistant              | Complex to implement            |
 
 **Recommended: Tiered NFT membership with quadratic voting**
 
 **Membership Tiers:**
 
-| Tier | Annual Contribution | Voting Weight | Benefits |
-|------|---------------------|---------------|----------|
-| Observer | $0 | 0 | Read-only access, forum participation |
-| Contributor | $1,000 | 1 vote | Proposal submission, API access |
-| Steward | $10,000 | 3 votes | Committee eligibility, dedicated support |
-| Patron | $50,000+ | 5 votes | Board seat, naming rights |
+| Tier        | Annual Contribution | Voting Weight | Benefits                                 |
+| ----------- | ------------------- | ------------- | ---------------------------------------- |
+| Observer    | $0                  | 0             | Read-only access, forum participation    |
+| Contributor | $1,000              | 1 vote        | Proposal submission, API access          |
+| Steward     | $10,000             | 3 votes       | Committee eligibility, dedicated support |
+| Patron      | $50,000+            | 5 votes       | Board seat, naming rights                |
 
 ### Target Members
 
 **Tier 1 Prospects (Steward/Patron):**
+
 - Etherscan / Blockscout - Core dependency
 - Infura / Alchemy / QuickNode - Infrastructure play
 - Arbitrum / Optimism / Base - L1 history dependency
 - Consensys / Protocol Labs - Ecosystem alignment
 
 **Tier 2 Prospects (Contributor):**
+
 - DeFi protocols (Uniswap, Aave, MakerDAO)
 - Analytics providers (Dune, Nansen, Flipside)
 - Academic institutions (MIT DCI, IC3, ETH Zurich)
@@ -494,14 +525,15 @@ The Ethereum historical data problem affects multiple stakeholders who each bene
 
 **Allocation Strategy:**
 
-| Category | Allocation | Purpose |
-|----------|------------|---------|
-| Endowment | 60% | Yield-generating for perpetual storage |
-| Operations | 20% | Node running, maintenance, development |
-| Grants | 15% | Ecosystem development, tooling |
-| Emergency | 5% | Buffer for unexpected costs |
+| Category   | Allocation | Purpose                                |
+| ---------- | ---------- | -------------------------------------- |
+| Endowment  | 60%        | Yield-generating for perpetual storage |
+| Operations | 20%        | Node running, maintenance, development |
+| Grants     | 15%        | Ecosystem development, tooling         |
+| Emergency  | 5%         | Buffer for unexpected costs            |
 
 **Security:**
+
 - Gnosis Safe multi-sig (4-of-7 signers)
 - Mix of core team + community elected
 - $100K+ transactions require DAO vote
@@ -522,24 +554,26 @@ FullCircleDAO/
 ### Legal Structure
 
 **Recommended: Wyoming DAO LLC**
+
 - Legal entity recognition
 - Limited liability for members
 - Compatible with token governance
 - Precedent from other DAOs (e.g., The LAO, Flamingo)
 
 **Alternative: Cayman Foundation**
+
 - Better for international members
 - No tax on retained earnings
 - More complex setup
 
 ### Launch Roadmap
 
-| Phase | Timeline | Objectives |
-|-------|----------|------------|
-| Foundation | Month 1-2 | Draft charter, deploy contracts (testnet), recruit 5 founding Stewards |
-| Soft Launch | Month 3-4 | Mainnet deployment, onboard 10-20 Contributors, begin storage ops |
-| Public Launch | Month 5-6 | Open membership, first governance proposals, grant program kickoff |
-| Growth | Month 7-12 | Target 50+ members, $100K+ treasury, 500GB+ actively stored |
+| Phase         | Timeline   | Objectives                                                             |
+| ------------- | ---------- | ---------------------------------------------------------------------- |
+| Foundation    | Month 1-2  | Draft charter, deploy contracts (testnet), recruit 5 founding Stewards |
+| Soft Launch   | Month 3-4  | Mainnet deployment, onboard 10-20 Contributors, begin storage ops      |
+| Public Launch | Month 5-6  | Open membership, first governance proposals, grant program kickoff     |
+| Growth        | Month 7-12 | Target 50+ members, $100K+ treasury, 500GB+ actively stored            |
 
 ---
 
@@ -567,6 +601,7 @@ The most robust approach combines both models:
 ```
 
 **Benefits of combination:**
+
 - DAO provides governance and stakeholder alignment
 - Endowment provides financial sustainability
 - Clear separation of concerns
@@ -576,18 +611,18 @@ The most robust approach combines both models:
 
 ## Comparison Matrix
 
-| Model | Initial Cost | Ongoing Effort | Sustainability | Decentralization |
-|-------|--------------|----------------|----------------|------------------|
-| Endowment | High | Low | High | Medium |
-| Grants/RetroPGF | Low | High | Medium | High |
-| Protocol Fees | Low | Low | High | High |
-| Usage Revenue | Medium | High | Medium | Low |
-| Data DAO | Medium | Medium | High | High |
-| Validator Contributions | Low | Medium | Medium | High |
-| Hybrid Swarm+Portal | Medium | Low | High | High |
-| Corporate Sponsorship | Low | Medium | Low | Low |
-| Storage Mining | High | Low | High | High |
-| Inflation Funding | Low | Low | High | Medium |
+| Model                   | Initial Cost | Ongoing Effort | Sustainability | Decentralization |
+| ----------------------- | ------------ | -------------- | -------------- | ---------------- |
+| Endowment               | High         | Low            | High           | Medium           |
+| Grants/RetroPGF         | Low          | High           | Medium         | High             |
+| Protocol Fees           | Low          | Low            | High           | High             |
+| Usage Revenue           | Medium       | High           | Medium         | Low              |
+| Data DAO                | Medium       | Medium         | High           | High             |
+| Validator Contributions | Low          | Medium         | Medium         | High             |
+| Hybrid Swarm+Portal     | Medium       | Low            | High           | High             |
+| Corporate Sponsorship   | Low          | Medium         | Low            | Low              |
+| Storage Mining          | High         | Low            | High           | High             |
+| Inflation Funding       | Low          | Low            | High           | Medium           |
 
 ---
 
